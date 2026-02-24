@@ -1,0 +1,44 @@
+# =============================================
+# 한국투자증권 실계좌 설정
+# =============================================
+
+# 실계좌 앱 키 (KIS 개발자 포털에서 발급)
+REAL_APP_KEY: "PSxjKLpqfgwAEcBBo5B4heIJxKO33aPfL9jP"
+
+# 실계좌 앱 시크릿
+REAL_APP_SECRET: "yyTm+Nd/NYbE5szr/nJd0HAYqVWMceekPAVZ21b13nZMr1xHXVGhIswdXJMF+fWR0si93ZOzC4P8eqqrWHg3N9luGYj4fyIt1iCRVWxHCzqHUmtSKGkz/+7d/BAV7vWwULm53pwGfCqfl2dJ0HD8Gq9LlZNK3WTfc1yx0KHT78ABGCFIzGo="
+
+# 실계좌 계좌번호 (앞 8자리)
+REAL_CANO: "64475564"
+
+# 실계좌 상품코드 (일반 주식: 01)
+REAL_ACNT_PRDT_CD: "01"
+
+# 실계좌 토큰 저장 경로
+REAL_TOKEN_PATH: "./real_token.json"
+
+# 실계좌 API URL
+REAL_URL: "https://openapi.koreainvestment.com:9443"
+
+
+# =============================================
+# 한국투자증권 모의계좌 설정
+# =============================================
+
+# 모의계좌 앱 키
+VIRTUAL_APP_KEY: "your_virtual_app_key_here"
+
+# 모의계좌 앱 시크릿
+VIRTUAL_APP_SECRET: "your_virtual_app_secret_here"
+
+# 모의계좌 계좌번호 (앞 8자리)
+VIRTUAL_CANO: "12345678"
+
+# 모의계좌 상품코드 (일반 주식: 01)
+VIRTUAL_ACNT_PRDT_CD: "01"
+
+# 모의계좌 토큰 저장 경로
+VIRTUAL_TOKEN_PATH: "/var/autobot/virtual_token.json"
+
+# 모의계좌 API URL
+VIRTUAL_URL: "https://openapivts.koreainvestment.com:29443"
