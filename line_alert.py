@@ -7,17 +7,17 @@ https://blog.naver.com/zacra/223622479916
 
 '''
 import telegram_alert
-import slack_alert
-import discord_alert
-import kakao_alert
+# import slack_alert
+# import discord_alert
+# import kakao_alert
 
 
 def SendMessage(msg):
 
     telegram_alert.SendMessage(msg)
 
-    slack_alert.SendMessage(msg)
+    # slack_alert.SendMessage(msg)
 
-    discord_alert.SendMessage(msg)
+    # discord_alert.SendMessage(msg)
 
-    kakao_alert.SendMessage(msg)
+    # kakao_alert.SendMessage(msg)
