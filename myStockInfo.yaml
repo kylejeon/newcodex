@@ -3,13 +3,12 @@
 # =============================================
 
 # 실계좌 앱 키 (KIS 개발자 포털에서 발급)
-REAL_APP_KEY: "PSxjKLpqfgwAEcBBo5B4heIJxKO33aPfL9jP"
+REAL_APP_KEY: "PSpKtS9vBsuaH9AUDRCcBA7dSs5og1OWuMsR"
 
 # 실계좌 앱 시크릿
-REAL_APP_SECRET: "yyTm+Nd/NYbE5szr/nJd0HAYqVWMceekPAVZ21b13nZMr1xHXVGhIswdXJMF+fWR0si93ZOzC4P8eqqrWHg3N9luGYj4fyIt1iCRVWxHCzqHUmtSKGkz/+7d/BAV7vWwULm53pwGfCqfl2dJ0HD8Gq9LlZNK3WTfc1yx0KHT78ABGCFIzGo="
-
+REAL_APP_SECRET: "g1bzXOEjhKN8eMR2I/e2BeUzk5bJMIP8GFLWFI/OULwgz6QSHs4jfsxC8MTSnkmrwQjz32zDjjzNFL9iuc+4zECld/h4IseN7Mnl/uEjO0GQrdeukioynhFJp51sus6RkEZu85a4k/Ba/ftu15AHvnh0kVjOGl2YHNUwyZ00uzjzjLhRV3E="
 # 실계좌 계좌번호 (앞 8자리)
-REAL_CANO: "64475564"
+REAL_CANO: "64475565"
 
 # 실계좌 상품코드 (일반 주식: 01)
 REAL_ACNT_PRDT_CD: "01"

@@ -28,7 +28,7 @@ import datetime
 DIST = "한국주식"
 
 #장이 열린지 여부 판단을 위한 계좌 정보로 현재 자동매매중인 계좌명 아무거나 넣으면 됩니다.
-Common.SetChangeMode("REAL3") #즉 다계좌 매매로 REAL, REAL2, REAL3 여러개를 자동매매 해도 한개만 여기 넣으면 됨!
+Common.SetChangeMode("REAL") #즉 다계좌 매매로 REAL, REAL2, REAL3 여러개를 자동매매 해도 한개만 여기 넣으면 됨!
 
 IsMarketOpen = KisKR.IsMarketOpen()
 
