@@ -22,10 +22,23 @@ async function readJson<T>(url?: string): Promise<T | null> {
   return (await r.json()) as T;
 }
 
+function pickBlobByPathname(blobs: Array<{ pathname: string; url: string; uploadedAt?: Date }>, key: string) {
+  const exact = blobs.find((b) => b.pathname === key);
+  if (exact) return exact;
+  const prefixed = blobs
+    .filter((b) => b.pathname.startsWith(key))
+    .sort((a, b) => {
+      const at = a.uploadedAt instanceof Date ? a.uploadedAt.getTime() : 0;
+      const bt = b.uploadedAt instanceof Date ? b.uploadedAt.getTime() : 0;
+      return bt - at;
+    });
+  return prefixed[0];
+}
+
 export async function loadStoredData(): Promise<StoredData> {
   const blobs = await list({ prefix: 'kosdaqpi/' });
-  const latestBlob = blobs.blobs.find((b) => b.pathname === LATEST_KEY);
-  const historyBlob = blobs.blobs.find((b) => b.pathname === HISTORY_KEY);
+  const latestBlob = pickBlobByPathname(blobs.blobs, LATEST_KEY);
+  const historyBlob = pickBlobByPathname(blobs.blobs, HISTORY_KEY);
 
   const latest = await readJson<DashboardPayload>(latestBlob?.url);
   const history = (await readJson<Snapshot[]>(historyBlob?.url)) ?? [];
