@@ -5,6 +5,12 @@ const LATEST_KEY = 'kosdaqpi/latest.json';
 const HISTORY_KEY = 'kosdaqpi/history.json';
 const MAX_HISTORY = 5000;
 
+function getPreferredAccess(): 'public' | 'private' {
+  const raw = (process.env.BLOB_ACCESS || '').toLowerCase().trim();
+  if (raw === 'private') return 'private';
+  return 'public';
+}
+
 async function readJson<T>(url?: string): Promise<T | null> {
   if (!url) return null;
   const headers: Record<string, string> = {};
@@ -26,21 +32,39 @@ export async function loadStoredData(): Promise<StoredData> {
   return { latest, history };
 }
 
+async function putJson(pathname: string, data: unknown): Promise<void> {
+  const body = JSON.stringify(data);
+  const baseOpts = {
+    contentType: 'application/json; charset=utf-8',
+    addRandomSuffix: false,
+  };
+
+  const preferred = getPreferredAccess();
+  const firstOpts: any = { ...baseOpts, access: preferred };
+
+  try {
+    await put(pathname, body, firstOpts);
+    return;
+  } catch (e) {
+    const msg = String(e);
+    if (preferred === 'private' && msg.includes('access must be "public"')) {
+      await put(pathname, body, { ...baseOpts, access: 'public' });
+      return;
+    }
+    if (preferred === 'public' && msg.includes('Cannot use public access on a private store')) {
+      await put(pathname, body, { ...baseOpts, access: 'private' as any });
+      return;
+    }
+    throw e;
+  }
+}
+
 export async function savePayload(payload: DashboardPayload): Promise<void> {
   const cur = await loadStoredData();
   const nextHistory = [...cur.history, payload.snapshot].slice(-MAX_HISTORY);
 
-  await put(LATEST_KEY, JSON.stringify(payload), {
-    access: 'private' as any,
-    contentType: 'application/json; charset=utf-8',
-    addRandomSuffix: false,
-  });
-
-  await put(HISTORY_KEY, JSON.stringify(nextHistory), {
-    access: 'private' as any,
-    contentType: 'application/json; charset=utf-8',
-    addRandomSuffix: false,
-  });
+  await putJson(LATEST_KEY, payload);
+  await putJson(HISTORY_KEY, nextHistory);
 }
 
 export async function resetData() {
