@@ -111,16 +111,47 @@ import time
 import pprint
 import pandas as pd
 import json
+import os
 from datetime import datetime
 
 
 import line_alert
-import KIS_KR_StopTrader  # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가
 
 
 
 #계좌 선택.. "VIRTUAL" 는 모의 계좌!
 Common.SetChangeMode("VIRTUAL") #REAL or VIRTUAL
+
+
+#####################################################################################################################################
+def EnsureFreshTokenIfExpired():
+    dist = Common.GetNowDist()
+    try:
+        market_status = KisKR.MarketStatus()
+        if market_status == "EGW00123":
+            token_path = Common.GetTokenPath(dist)
+            print("[TOKEN] expired token detected. dist=", dist, " path=", token_path)
+
+            if os.path.exists(token_path):
+                os.remove(token_path)
+                print("[TOKEN] removed expired token file:", token_path)
+
+            new_token = Common.GetToken(dist)
+            if new_token == "FAIL" or new_token is None:
+                print("[TOKEN] token reissue failed")
+            else:
+                print("[TOKEN] token reissued")
+    except Exception as e:
+        print("[TOKEN] check/reissue exception:", e)
+
+
+# [토큰 만료 자동복구]
+# EGW00123(기간 만료 토큰) 응답이면 저장된 토큰 파일을 삭제하고 재발급한다.
+EnsureFreshTokenIfExpired()
+
+# [2026.01.23] 절반 트레일링 스탑 정리 로직 추가
+# 토큰 복구 후 import 되도록 지연 로딩
+import KIS_KR_StopTrader
 
 
 #####################################################################################################################################
