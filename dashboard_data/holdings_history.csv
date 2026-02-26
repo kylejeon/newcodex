@@ -1,0 +1,3 @@
+StockCode,StockName,StockAmt,StockAvgPrice,StockOriMoney,StockNowMoney,StockNowPrice,StockRevenueRate,StockRevenueMoney,snapshot_ts
+360750,TIGER 미국S&P500,1,18930.0,18930,24510,24510,29.47,5580,2026-02-26 14:36:26
+360750,TIGER 미국S&P500,1,18930.0000,18930,24500,24500,29.42,5570,2026-02-26 14:50:14

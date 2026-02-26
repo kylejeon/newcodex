@@ -6,11 +6,15 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+ROOT = Path(__file__).resolve().parent
+# KIS_Common.py reads ./myStockInfo.yaml using relative path.
+# Force cwd to project root so this script works from any launch directory.
+os.chdir(ROOT)
+
 import KIS_Common as Common
 import KIS_API_Helper_KR as KisKR
 
 
-ROOT = Path(__file__).resolve().parent
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -26,6 +30,8 @@ def safe_json(path: Path, default):
 
 def main():
     vercel_url = os.getenv("DASHBOARD_VERCEL_URL", "").rstrip("/")
+    if vercel_url and not vercel_url.startswith(("http://", "https://")):
+        vercel_url = f"https://{vercel_url}"
     ingest_token = os.getenv("DASHBOARD_INGEST_TOKEN", "")
     account_mode = os.getenv("ACCOUNT_MODE", "REAL").upper()
 

@@ -108,7 +108,7 @@ export default function Page() {
       <div className="header-row">
         <div>
           <h1>Kosdaqpi 실시간 대시보드</h1>
-          <div className="sub">잔고, 보유현황, 주문내역, 노출(Exposure), DD를 웹에서 상시 확인</div>
+          <div className="sub">잔고, 보유현황, 주문내역, 노출도, DD를 웹에서 상시 확인</div>
         </div>
         <div className="controls">
           <label>새로고침(초)</label>
@@ -138,9 +138,9 @@ export default function Page() {
       <div className="grid kpi" style={{ marginTop: 12 }}>
         <div className="card"><div className="kpi-title">누적 수익률(업로드 기준)</div><div className="kpi-value">{totalRet.toFixed(2)}%</div></div>
         <div className="card"><div className="kpi-title">MDD</div><div className="kpi-value danger">{maxDD.toFixed(2)}%</div></div>
-        <div className="card"><div className="kpi-title">Exposure</div><div className="kpi-value">{num(snapshot?.exposure_rate).toFixed(2)}</div></div>
-        <div className="card"><div className="kpi-title">InvestCnt</div><div className="kpi-value">{num(snapshot?.invest_cnt)}</div></div>
-        <div className="card"><div className="kpi-title">CutCnt</div><div className="kpi-value">{num(snapshot?.cut_cnt)}</div></div>
+        <div className="card"><div className="kpi-title">노출도</div><div className="kpi-value">{num(snapshot?.exposure_rate).toFixed(2)}</div></div>
+        <div className="card"><div className="kpi-title">투자 종목 수</div><div className="kpi-value">{num(snapshot?.invest_cnt)}</div></div>
+        <div className="card"><div className="kpi-title">손절 카운트</div><div className="kpi-value">{num(snapshot?.cut_cnt)}</div></div>
         <div className="card"><div className="kpi-title">계좌 모드</div><div className="kpi-value">{snapshot?.account_mode ?? '-'}</div></div>
       </div>
 
@@ -159,7 +159,7 @@ export default function Page() {
         </div>
 
         <div className="card">
-          <h3>Drawdown / Exposure</h3>
+          <h3>드로우다운 / 노출도</h3>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={chartRows}>
               <CartesianGrid strokeDasharray="3 3" />
