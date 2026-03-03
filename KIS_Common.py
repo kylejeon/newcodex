@@ -18,6 +18,8 @@ import yaml
 
 import json
 import requests
+import os
+import base64
 
 from datetime import datetime, timedelta
 from pytz import timezone
@@ -220,13 +222,22 @@ def MakeToken(dist = "REAL"):
     
 
     if res.status_code == 200:
-        my_token = res.json()["access_token"]
+        token_resp = res.json()
+        my_token = token_resp["access_token"]
 
         #빈 딕셔너리를 선언합니다!
         dataDict = dict()
 
         #해당 토큰을 파일로 저장해 둡니다!
         dataDict["authorization"] = my_token
+        dataDict["issued_at"] = int(time.time())
+        if "expires_in" in token_resp:
+            try:
+                dataDict["expires_in"] = int(token_resp["expires_in"])
+            except Exception:
+                pass
+        if "access_token_token_expired" in token_resp:
+            dataDict["access_token_token_expired"] = str(token_resp["access_token_token_expired"])
         with open(GetTokenPath(dist), 'w') as outfile:
             json.dump(dataDict, outfile)   
 
@@ -237,6 +248,55 @@ def MakeToken(dist = "REAL"):
     else:
         print('Get Authentification token fail!')  
         return "FAIL"
+
+
+def _clear_token_file(dist = "REAL"):
+    try:
+        os.remove(GetTokenPath(dist))
+    except Exception:
+        pass
+
+
+def _parse_jwt_exp(token: str):
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        obj = json.loads(decoded)
+        exp = obj.get("exp")
+        if exp is None:
+            return None
+        return int(exp)
+    except Exception:
+        return None
+
+
+def _is_token_expired(token_dict):
+    now_ts = int(time.time())
+    # 만료 3분 전부터 갱신
+    safety_sec = 180
+
+    # 1) issued_at + expires_in
+    try:
+        issued_at = int(token_dict.get("issued_at", 0))
+        expires_in = int(token_dict.get("expires_in", 0))
+        if issued_at > 0 and expires_in > 0:
+            return now_ts >= (issued_at + expires_in - safety_sec)
+    except Exception:
+        pass
+
+    # 2) JWT exp
+    token = token_dict.get("authorization")
+    if token:
+        exp = _parse_jwt_exp(token)
+        if exp is not None:
+            return now_ts >= (exp - safety_sec)
+
+    # 3) 메타데이터가 없다면 보수적으로 재발급
+    return True
 
 
 #파일에 저장된 토큰값을 읽는 함수.. 만약 파일이 없다면 MakeToken 함수를 호출한다!
@@ -250,7 +310,15 @@ def GetToken(dist = "REAL"):
         #이 부분이 파일을 읽어서 딕셔너리에 넣어주는 로직입니다. 
         with open(GetTokenPath(dist), 'r') as json_file:
             dataDict = json.load(json_file)
+        
+        if 'authorization' not in dataDict or dataDict['authorization'] in [None, "", "FAIL"]:
+            _clear_token_file(dist)
+            return MakeToken(dist)
 
+        if _is_token_expired(dataDict):
+            print("Token expired/near-expiry. Refreshing token...")
+            _clear_token_file(dist)
+            return MakeToken(dist)
 
         return dataDict['authorization']
 
@@ -1245,5 +1313,4 @@ def GetStoch(ohlcv,period,st):
     dic_stoch['slow_d'] = slow_d.iloc[st]
 
     return dic_stoch
-
 

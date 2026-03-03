@@ -1058,8 +1058,12 @@ def MakeBuyMarketOrder(stockcode, amt, adjustAmt = False):
             if res.json()["msg_cd"] == "APBK1744":
                 MakeBuyMarketOrderIRP(stockcode, amt)
             
-            
-            return res.json()["msg_cd"]
+            return {
+                "error": True,
+                "msg_cd": res.json().get("msg_cd", ""),
+                "msg1": res.json().get("msg1", ""),
+                "status_code": res.status_code,
+            }
             
 
 #시장가 매도하기!
@@ -1564,7 +1568,7 @@ def CheckPossibleBuyInfo(stockcode, price, type):
          TrId = "VTTC8908R"
 
     type_code = "00" #지정가
-    if type.upper() == "MAREKT":
+    if type.upper() == "MARKET":
         type_code = "01"
 
 
@@ -1604,7 +1608,12 @@ def CheckPossibleBuyInfo(stockcode, price, type):
 
     else:
         print("Error Code : " + str(res.status_code) + " | " + res.text)
-        return res.json()["msg_cd"]
+        return {
+            "error": True,
+            "msg_cd": res.json().get("msg_cd", ""),
+            "msg1": res.json().get("msg1", ""),
+            "status_code": res.status_code,
+        }
 
 
 #매수 가능한수량으로 보정
@@ -1652,7 +1661,7 @@ def CheckPossibleBuyInfoIRP(stockcode, price, type):
 
 
     type_code = "00" #지정가
-    if type.upper() == "MAREKT":
+    if type.upper() == "MARKET":
         type_code = "01"
 
 

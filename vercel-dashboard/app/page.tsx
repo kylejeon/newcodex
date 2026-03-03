@@ -43,6 +43,20 @@ function money(v: unknown) {
   return `${Math.round(num(v)).toLocaleString()}원`;
 }
 
+function cleanPct(v: number) {
+  const n = Number.isFinite(v) ? v : 0;
+  // 미세 노이즈는 0으로 간주해 -0.00% 표시와 잔떨림 제거
+  return Math.abs(n) < 0.02 ? 0 : n;
+}
+
+function fmtPctAxis(v: number) {
+  const n = cleanPct(Number(v));
+  if (n === 0) return "0.00%";
+  // 매우 작은 구간에서는 소수 2자리까지 표시
+  if (Math.abs(n) < 0.1) return `${n.toFixed(2)}%`;
+  return `${n.toFixed(1)}%`;
+}
+
 export default function Page() {
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -80,7 +94,7 @@ export default function Page() {
       return {
         ts: x.ts?.slice(5, 16),
         total: num(x.total_money),
-        dd: dd * 100,
+        dd: cleanPct(dd * 100),
         exposure: num(x.exposure_rate),
         invest: num(x.invest_cnt),
       };
@@ -100,7 +114,14 @@ export default function Page() {
 
   const maxDD = useMemo(() => {
     if (!chartRows.length) return 0;
-    return Math.min(...chartRows.map((x) => x.dd));
+    return cleanPct(Math.min(...chartRows.map((x) => x.dd)));
+  }, [chartRows]);
+
+  const ddAxisDomain = useMemo(() => {
+    const minDd = chartRows.length ? Math.min(...chartRows.map((x) => x.dd)) : 0;
+    // DD가 사실상 0이면 축도 고정해서 흔들림 제거
+    if (Math.abs(minDd) < 0.01) return [-0.1, 0.1] as [number, number];
+    return [Math.min(minDd * 1.15, -0.1), 0.1] as [number, number];
   }, [chartRows]);
 
   return (
@@ -164,7 +185,7 @@ export default function Page() {
             <LineChart data={chartRows}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="ts" minTickGap={40} />
-              <YAxis yAxisId="left" tickFormatter={(v) => `${v.toFixed(1)}%`} />
+              <YAxis yAxisId="left" domain={ddAxisDomain} tickFormatter={(v) => fmtPctAxis(Number(v))} />
               <YAxis yAxisId="right" orientation="right" />
               <Tooltip />
               <Line yAxisId="left" type="monotone" dataKey="dd" stroke="#b91c1c" dot={false} />
