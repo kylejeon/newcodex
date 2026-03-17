@@ -24,6 +24,7 @@ import json
 import line_alert
 import fcntl
 import datetime
+import os
 
 DIST = "한국주식"
 
@@ -35,7 +36,12 @@ IsMarketOpen = KisKR.IsMarketOpen()
 #최소 주문 수량 (주식은 1주 단위)
 minimumVolume = 1
 
-auto_order_file_path = "/var/autobot/KIS_KR_StopTrader_AutoOrderList.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+autobot_data_dir = os.environ.get("AUTOBOT_DATA_DIR", "autobot_data")
+if not os.path.isabs(autobot_data_dir):
+    autobot_data_dir = os.path.join(BASE_DIR, autobot_data_dir)
+os.makedirs(autobot_data_dir, exist_ok=True)
+auto_order_file_path = os.path.join(autobot_data_dir, "KIS_KR_StopTrader_AutoOrderList.json")
 time.sleep(random.random()*0.1)
 
 #자동 주문 리스트 읽기!

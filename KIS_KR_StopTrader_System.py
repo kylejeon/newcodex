@@ -23,6 +23,7 @@ import json
 import random
 import fcntl
 import line_alert
+import os
 
 from tendo import singleton 
 me = singleton.SingleInstance()
@@ -35,7 +36,13 @@ time.sleep(30.0) #스플릿 트레이더와 중복을 피하기 위해! 30초 �
 
 IsMarketOpen = KisKR.IsMarketOpen()
 
-auto_order_file_path = "/var/autobot/KIS_KR_StopTrader_AutoOrderList.json"
+# /var/autobot 고정 경로 대신 실행 파일 기준 상대경로(또는 환경변수) 사용
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+autobot_data_dir = os.environ.get("AUTOBOT_DATA_DIR", "autobot_data")
+if not os.path.isabs(autobot_data_dir):
+    autobot_data_dir = os.path.join(BASE_DIR, autobot_data_dir)
+os.makedirs(autobot_data_dir, exist_ok=True)
+auto_order_file_path = os.path.join(autobot_data_dir, "KIS_KR_StopTrader_AutoOrderList.json")
 time.sleep(random.random()*0.1)
 
 #지정가 주문을 읽고 필요 수량만큼 취소하는 함수

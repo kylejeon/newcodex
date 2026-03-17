@@ -18,6 +18,27 @@ import KIS_API_Helper_KR as KisKR
 KST = ZoneInfo("Asia/Seoul")
 
 
+def load_env_file(path: Path):
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        val = val.strip()
+        if not key:
+            continue
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1]
+        # Already exported env has priority
+        if key not in os.environ:
+            os.environ[key] = val
+
+
 def safe_json(path: Path, default):
     try:
         if path.exists():
@@ -29,10 +50,14 @@ def safe_json(path: Path, default):
 
 
 def main():
-    vercel_url = os.getenv("DASHBOARD_VERCEL_URL", "").rstrip("/")
+    # Allow local execution without explicit `export ...`.
+    load_env_file(ROOT / ".env.local")
+    load_env_file(ROOT / "vercel-dashboard" / ".env.local")
+
+    vercel_url = os.getenv("DASHBOARD_VERCEL_URL", "").strip().rstrip("/")
     if vercel_url and not vercel_url.startswith(("http://", "https://")):
         vercel_url = f"https://{vercel_url}"
-    ingest_token = os.getenv("DASHBOARD_INGEST_TOKEN", "")
+    ingest_token = os.getenv("DASHBOARD_INGEST_TOKEN", "").strip()
     account_mode = os.getenv("ACCOUNT_MODE", "REAL").upper()
 
     if not vercel_url or not ingest_token:

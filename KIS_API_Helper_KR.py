@@ -34,6 +34,22 @@ import pandas as pd
 from pykrx import stock
 
 
+def _is_expired_token_msg_cd(msg_cd):
+    return str(msg_cd) == "EGW00123"
+
+
+def _clear_token_file_safe():
+    try:
+        dist = Common.GetNowDist()
+        if hasattr(Common, "_clear_token_file"):
+            Common._clear_token_file(dist)
+        else:
+            import os
+            os.remove(Common.GetTokenPath(dist))
+    except Exception:
+        pass
+
+
 
 #거래량 상위 종목 리스트 얻기
 def GetTopVolumeStockList():
@@ -192,20 +208,27 @@ def MarketStatus(stock_code = '069500'):
         "FID_INPUT_ISCD": stock_code                          # stock_code: 무조건 주식코드 입력이 필요해서 입력이 없을 경우 KODEX 200의 코드(069500)를 기본으로 사용
     }
 
-    res = requests.get(URL, headers=headers, params=params)
+    for attempt in range(2):
+        res = requests.get(URL, headers=headers, params=params)
+        data = {}
+        try:
+            data = res.json()
+        except Exception:
+            data = {}
 
-    if res.status_code == 200 and res.json()["rt_cd"] == '0':
-        output1 = res.json()['output1']
-        #output2 = res.json()['output2']                     # 동시호가 신호가 필요할 경우
+        if res.status_code == 200 and data.get("rt_cd") == '0':
+            output1 = data['output1']
+            return {
+                'Status': output1['new_mkop_cls_code'][0],  # '','1' : 장개시전,  '2' : 장중,  '3' : 장종료후,  '4' : 시간외단일가,  '0' : 동시호가(개장전,개장후)
+            }
 
-        result = {
-            'Status': output1['new_mkop_cls_code'][0],     # '','1' : 장개시전,  '2' : 장중,  '3' : 장종료후,  '4' : 시간외단일가,  '0' : 동시호가(개장전,개장후)
-        }
-
-        return result
-    else:
+        msg_cd = data.get("msg_cd", "")
         print("Error Code : " + str(res.status_code) + " | " + res.text)
-        return res.json()["msg_cd"]
+        if _is_expired_token_msg_cd(msg_cd) and attempt == 0:
+            _clear_token_file_safe()
+            headers["authorization"] = f"Bearer {Common.GetToken(Common.GetNowDist())}"
+            continue
+        return {"Status": "0", "ErrorMsgCd": msg_cd}
     
 
 
@@ -240,23 +263,30 @@ def IsTodayOpenCheck():
     }
 
     # 호출
-    res = requests.get(URL, headers=headers, params=params)
-    #pprint.pprint(res.json())
+    for attempt in range(2):
+        res = requests.get(URL, headers=headers, params=params)
+        data = {}
+        try:
+            data = res.json()
+        except Exception:
+            data = {}
 
-    if res.status_code == 200 and res.json()["rt_cd"] == '0':
-        DayList = res.json()['output']
+        if res.status_code == 200 and data.get("rt_cd") == '0':
+            DayList = data['output']
+            IsOpen = 'Y'
+            for dayInfo in DayList:
+                if dayInfo['bass_dt'] == formattedDate:
+                    IsOpen = dayInfo['opnd_yn']
+                    break
+            return IsOpen
 
-        IsOpen = 'Y'
-        for dayInfo in DayList:
-            if dayInfo['bass_dt'] == formattedDate:
-                IsOpen = dayInfo['opnd_yn']
-                break
-
-
-        return IsOpen
-    else:
+        msg_cd = data.get("msg_cd", "")
         print("Error Code : " + str(res.status_code) + " | " + res.text)
-        return res.json()["msg_cd"]
+        if _is_expired_token_msg_cd(msg_cd) and attempt == 0:
+            _clear_token_file_safe()
+            headers["authorization"] = f"Bearer {Common.GetToken(Common.GetNowDist())}"
+            continue
+        return 'N'
 
 
 
@@ -404,7 +434,7 @@ def IsMarketOpen():
             pprint.pprint(market)
 
             IsJangJung = False
-            if (market['Status'] == '2'):
+            if isinstance(market, dict) and market.get('Status') == '2':
                 IsJangJung = True
                 
             

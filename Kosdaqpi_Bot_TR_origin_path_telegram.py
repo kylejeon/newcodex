@@ -162,50 +162,20 @@ InvestStockList = ["122630","252670","233740","251340"] #아래 예시처럼 직
 지정가 주문이라면 0 ~ 0.98
 사이의 값으로 설정하세요! (0.1 = 10% 0.5 = 50%)
 '''
-InvestRate = 0.85 #총 평가금액에서 해당 봇에게 할당할 총 금액비율 0.1 = 10%  0.5 = 50%
+InvestRate = 0.8 #총 평가금액에서 해당 봇에게 할당할 총 금액비율 0.1 = 10%  0.5 = 50%
 #####################################################################################################################################
 
 # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가 - 트레일링 스탑 콜백비율 설정
 TRAILING_STOP_CANDLE_COUNT = 20  # 콜백비율 계산에 사용할 캔들 개수
 TRAILING_STOP_MULTIPLIER = 2.0   # 고가-저가 평균에 곱할 배수
 TRAILING_STOP_MIN_RATE = 2.0     # 최소 콜백비율 (%)
-REORDER_MAX_TRIES = int(os.getenv("REORDER_MAX_TRIES", "2"))  # 체결 미확인 시 재주문 최대 횟수
-REORDER_COOLDOWN_SEC = int(os.getenv("REORDER_COOLDOWN_SEC", "180"))  # 재주문 최소 간격(초)
-DEBUG_SELL_DIAG = os.getenv("DEBUG_SELL_DIAG", "1") == "1"  # 매도/보류 진단 메시지(종목당 일 1회)
 #####################################################################################################################################
-
-# Best 조합 업사이드 가산 (백테스트 best와 동일한 기본값)
-EXPO_UP_MAX_DD = -0.07
-EXPO_UP_RATE = 1.16
-EXPO_UP2_MAX_DD = -0.04
-EXPO_UP2_RATE = 1.22
-DD_GUARD_LV1 = -0.14
-DD_GUARD_LV2 = -0.18
-DD_GUARD_RATE1 = 0.88
-DD_GUARD_RATE2 = 0.75
-
-# v6b 핵심 이식: 233740 적응형 하드스탑 (진입평단 기준)
-ENABLE_233740_HARD_STOP = True
-HARD_STOP_233740_PCT_TIGHT = 0.085   # 약세 + 고변동
-HARD_STOP_233740_PCT_BASE = 0.125    # 일반 구간
-HARD_STOP_VOL_TH = 0.045             # 전일 변동폭 비율 임계치
-
-# v7 이식: 코스닥 컷매도 완화/종가기준 + 코스피(252670) 매도 임계치
-CLOSE_BASED_CUT_CODES = {"233740", "251340"}
-KOSDAQ_251340_CUT_RATE = 0.35
-KOSDAQ_233740_CUT_RATE_BULL = 0.35
-KOSDAQ_233740_CUT_RATE_BEAR = 0.25
-KOSPI_252670_DISPARITY11_TH = 106
-# v7_best (buy_wide_disp) 코스피 매수 파라미터
-KOSPI_252670_BUY_RSI_MAX = 70
-KOSPI_122630_BUY_DISPARITY_LOW = 97
-KOSPI_122630_BUY_DISPARITY_HIGH = 107
-KOSPI_122630_BUY_RSI_MAX = 80
 
 
 
 
 BOT_NAME = Common.GetNowDist() + "_MyKospidaq_Bot"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 
@@ -239,42 +209,6 @@ def GetKospidaqStrategyData(stock_code,KospidaqStrategyList):
     return ResultData
 
 
-def GetHoldingAmtFromList(my_stock_list, stock_code):
-    try:
-        for my_stock in my_stock_list:
-            if my_stock.get('StockCode') == stock_code:
-                return int(my_stock.get('StockAmt', 0))
-    except Exception:
-        return 0
-    return 0
-
-
-def SendSellDiagOnce(strategy_data, msg):
-    if not DEBUG_SELL_DIAG:
-        return
-    if strategy_data.get('LastSellDiagDate') == day_str:
-        return
-    strategy_data['LastSellDiagDate'] = day_str
-    print(msg)
-    telegram_alert.SendMessage(msg)
-    return 0
-
-
-
-# 주문 응답 정상 여부
-def IsOrderAccepted(order_data):
-    if isinstance(order_data, dict):
-        return order_data.get('OrderNum2') not in [None, "", "0"]
-    return False
-
-
-def IsHardRejectOrder(order_data):
-    if not isinstance(order_data, dict):
-        return False
-    msg_cd = str(order_data.get("msg_cd", "")).strip().upper()
-    # 계좌/권한형 거절 코드는 당일 반복 재시도해도 성공 가능성이 거의 없음
-    return msg_cd in {"APBK1681", "APBK1497"}
-
 
 #투자개수
 def GetKospidaqInvestCnt(KospidaqStrategyList):
@@ -298,6 +232,33 @@ def GetKospidaqInvestCnt(KospidaqStrategyList):
             
         
     return InvestCnt
+
+
+def IsOrderAccepted(order_resp):
+    if not isinstance(order_resp, dict):
+        return False
+    if order_resp.get('error') is True:
+        return False
+    if str(order_resp.get('status_code', '200')) != '200':
+        return False
+    msg_cd = str(order_resp.get('msg_cd', '')).strip()
+    if msg_cd == "":
+        return True
+    reject_prefixes = ("APBK", "EGW", "OPSP")
+    return not msg_cd.startswith(reject_prefixes)
+
+
+def FormatOrderResp(order_resp):
+    if isinstance(order_resp, dict):
+        return (
+            "status_code={0}, msg_cd={1}, msg1={2}, error={3}"
+        ).format(
+            order_resp.get('status_code'),
+            order_resp.get('msg_cd'),
+            order_resp.get('msg1'),
+            order_resp.get('error'),
+        )
+    return str(order_resp)
 
 
 
@@ -363,7 +324,7 @@ for stock_code in InvestStockList:
 ###################################################################
 KospidaqStrategyList = list()
 #파일 경로입니다.
-data_file_path = "./KrStock_" + BOT_NAME + ".json"
+data_file_path = os.path.join(BASE_DIR, "KrStock_" + BOT_NAME + ".json")
 
 try:
     #이 부분이 파일을 읽어서 리스트에 넣어주는 로직입니다. 
@@ -378,12 +339,6 @@ try:
             KospidaqStrategyData['TrailingStopCallbackRate'] = 0
         if KospidaqStrategyData.get('PrevStockAmt') == None:
             KospidaqStrategyData['PrevStockAmt'] = 0
-        if KospidaqStrategyData.get('ReorderTryCnt') == None:
-            KospidaqStrategyData['ReorderTryCnt'] = 0
-        if KospidaqStrategyData.get('LastReorderTs') == None:
-            KospidaqStrategyData['LastReorderTs'] = 0
-        if KospidaqStrategyData.get('LastSellDiagDate') == None:
-            KospidaqStrategyData['LastSellDiagDate'] = ""
 
 except Exception as e:
     print("Init....")
@@ -400,9 +355,6 @@ except Exception as e:
         KospidaqStrategyData['IsTrailingStopSet'] = False # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가
         KospidaqStrategyData['TrailingStopCallbackRate'] = 0 # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가
         KospidaqStrategyData['PrevStockAmt'] = 0 # [2026.01.23] 추가 매수 감지를 위한 이전 보유 수량
-        KospidaqStrategyData['ReorderTryCnt'] = 0 # 체결 미확인 재주문 횟수
-        KospidaqStrategyData['LastReorderTs'] = 0 # 마지막 재주문 시각(epoch)
-        KospidaqStrategyData['LastSellDiagDate'] = "" # 매도 진단 메시지 발송일(중복 방지)
 
         KospidaqStrategyList.append(KospidaqStrategyData)
 
@@ -415,7 +367,7 @@ except Exception as e:
 ###################################################################
 DateData = dict()
 #파일 경로입니다.
-date_file_path = "./KrStock_" + BOT_NAME + "_Date.json"
+date_file_path = os.path.join(BASE_DIR, "KrStock_" + BOT_NAME + "_Date.json")
 
 try:
     #이 부분이 파일을 읽어서 리스트에 넣어주는 로직입니다. 
@@ -442,8 +394,10 @@ except Exception as e:
 DateSiGaLogicDoneDict = dict()
 
 #파일 경로입니다.
-# /var/autobot가 없는 환경(WSL/개인PC)에서도 동작하도록 기본 저장경로를 홈 하위로 둔다.
-AUTOBOT_DATA_DIR = os.environ.get("AUTOBOT_DATA_DIR", os.path.join(os.path.expanduser("~"), "autobot"))
+# 스크립트 위치 기준 상대경로를 기본으로 사용 (환경별 절대경로 차이 제거)
+AUTOBOT_DATA_DIR = os.environ.get("AUTOBOT_DATA_DIR", "autobot_data")
+if not os.path.isabs(AUTOBOT_DATA_DIR):
+    AUTOBOT_DATA_DIR = os.path.join(BASE_DIR, AUTOBOT_DATA_DIR)
 os.makedirs(AUTOBOT_DATA_DIR, exist_ok=True)
 siga_logic_file_path = os.path.join(AUTOBOT_DATA_DIR, "KrStock_" + BOT_NAME + "_TodaySigaLogicDoneDate.json")
 try:
@@ -667,12 +621,6 @@ if ENABLE_ORDER_EXECUTION == True:
                 with open(siga_logic_file_path, 'w') as outfile:
                     json.dump(DateSiGaLogicDoneDict, outfile)
 
-            if DateSiGaLogicDoneDict.get('PeakMoney') == None:
-                DateSiGaLogicDoneDict['PeakMoney'] = TotalMoney
-                DateSiGaLogicDoneDict['ExposureRate'] = 1.0
-                with open(siga_logic_file_path, 'w') as outfile:
-                    json.dump(DateSiGaLogicDoneDict, outfile)
-
 
 
         # Combine the OHLCV data into a single DataFrame
@@ -702,54 +650,6 @@ if ENABLE_ORDER_EXECUTION == True:
         IsNoWay = False
         if  (Kospi_Long_Data['prevChangeMa_S'].values[0] > 0 and Kospi_Short_Data['prevChangeMa_S'].values[0] > 0) or (Kospi_Long_Data['prevChangeMa_S'].values[0] < 0 and Kospi_Short_Data['prevChangeMa_S'].values[0] < 0)  or (Kosdaq_Long_Data['prevChangeMa_S'].values[0] > 0 and Kosdaq_Short_Data['prevChangeMa_S'].values[0] > 0) or (Kosdaq_Long_Data['prevChangeMa_S'].values[0] < 0 and Kosdaq_Short_Data['prevChangeMa_S'].values[0] < 0) :
             IsNoWay = True
-
-        IsStrongTrend = False
-        if (
-            Kosdaq_Long_Data['ma20_before'].values[0] > Kosdaq_Long_Data['ma60_before'].values[0]
-            and Kospi_Long_Data['ma20_before'].values[0] > Kospi_Long_Data['ma60_before'].values[0]
-            and Kosdaq_Long_Data['prevChangeMa'].values[0] > 0
-            and Kospi_Long_Data['prevChangeMa'].values[0] > 0
-        ):
-            IsStrongTrend = True
-
-        IsVeryStrongTrend = False
-        if (
-            IsStrongTrend == True
-            and Kosdaq_Long_Data['Average_Momentum'].values[0] > Kosdaq_Short_Data['Average_Momentum'].values[0]
-            and Kospi_Long_Data['prevChangeMa'].values[0] > Kospi_Short_Data['prevChangeMa'].values[0]
-        ):
-            IsVeryStrongTrend = True
-
-        # 실계좌용 DD 추정: 남은현금 + 보유수량*현재가
-        CurrentNowInvestMoney = 0
-        for t_code in InvestStockList:
-            t_amt = 0
-            for my_stock in MyStockList:
-                if my_stock['StockCode'] == t_code:
-                    t_amt = int(my_stock['StockAmt'])
-                    break
-            if t_amt > 0:
-                CurrentNowInvestMoney += (KisKR.GetCurrentPrice(t_code) * t_amt)
-
-        CurrentPortfolioMoney = RemainInvestMoney + CurrentNowInvestMoney
-        if DateSiGaLogicDoneDict['PeakMoney'] < CurrentPortfolioMoney:
-            DateSiGaLogicDoneDict['PeakMoney'] = CurrentPortfolioMoney
-        CurrentDD = (CurrentPortfolioMoney / DateSiGaLogicDoneDict['PeakMoney']) - 1.0
-
-        ExposureRate = 1.0
-        if CurrentDD >= EXPO_UP2_MAX_DD and IsNoWay == False and IsVeryStrongTrend == True and DateSiGaLogicDoneDict['IsCutCnt'] == 0:
-            ExposureRate = EXPO_UP2_RATE
-        elif CurrentDD >= EXPO_UP_MAX_DD and IsNoWay == False and IsStrongTrend == True and DateSiGaLogicDoneDict['IsCutCnt'] == 0:
-            ExposureRate = EXPO_UP_RATE
-
-        if CurrentDD <= DD_GUARD_LV2:
-            ExposureRate = min(ExposureRate, DD_GUARD_RATE2)
-        elif CurrentDD <= DD_GUARD_LV1:
-            ExposureRate = min(ExposureRate, DD_GUARD_RATE1)
-
-        DateSiGaLogicDoneDict['ExposureRate'] = ExposureRate
-        with open(siga_logic_file_path, 'w') as outfile:
-            json.dump(DateSiGaLogicDoneDict, outfile)
         #######################################################################################################################################
 
         
@@ -804,28 +704,20 @@ if ENABLE_ORDER_EXECUTION == True:
                 with open(date_file_path, 'w') as outfile:
                     json.dump(DateData, outfile)
 
-                #당일 시작 시점 실잔고 먼저 조회
-                my_stock_list_day = KisKR.GetMyStockList()
-
                 #기본적으로 날이 바뀌었기 때문에 데이 조건(BUY_DAY,SELL_DAY)를 모두 초기화 한다!
                 for KospidaqStrategyData in KospidaqStrategyList:
                     KospidaqStrategyData['DayStatus'] = "NONE"
 
                     #그리고 투자중 상태는 SELL_DAY로 바꿔준다!!
                     if KospidaqStrategyData['Status'] == "INVESTING":
-                        live_amt = GetHoldingAmtFromList(my_stock_list_day, KospidaqStrategyData['StockCode'])
-                        if live_amt > 0:
-                            KospidaqStrategyData['DayStatus'] = "SELL_DAY"
+                        KospidaqStrategyData['DayStatus'] = "SELL_DAY"
 
-                            msg = KospidaqStrategyData['StockName'] + "  투자중 상태에요! 조건을 만족하면 매도로 트레이딩 종료 합니다.!!"
-                            print(msg)
-                            telegram_alert.SendMessage(msg)
-                        else:
-                            # 실잔고가 없으면 상태를 즉시 정정
-                            KospidaqStrategyData['Status'] = "REST"
-                            KospidaqStrategyData['TryBuyCnt'] = 0
+                        msg = KospidaqStrategyData['StockName'] + "  투자중 상태에요! 조건을 만족하면 매도로 트레이딩 종료 합니다.!!"
+                        print(msg)
+                        telegram_alert.SendMessage(msg)
 
 
+            
                 for stock_code in  all_stocks.index:
                     stock_data = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
 
@@ -844,20 +736,8 @@ if ENABLE_ORDER_EXECUTION == True:
                         KospidaqStrategyData['TryBuyCnt'] = 0 #매수시도하고자 하는 수량!
                         KospidaqStrategyData['IsTrailingStopSet'] = False # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가
                         KospidaqStrategyData['TrailingStopCallbackRate'] = 0 # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가
-                        KospidaqStrategyData['PrevStockAmt'] = 0
-                        KospidaqStrategyData['ReorderTryCnt'] = 0
-                        KospidaqStrategyData['LastReorderTs'] = 0
-                        KospidaqStrategyData['LastSellDiagDate'] = ""
 
                         KospidaqStrategyList.append(KospidaqStrategyData)
-
-                    # 실잔고 기준 상태 복구: 보유 중이면 매수 준비 상태로 가지 않도록 강제 동기화
-                    holding_amt = GetHoldingAmtFromList(my_stock_list_day, stock_code)
-                    if holding_amt > 0:
-                        KospidaqStrategyData['Status'] = "INVESTING"
-                        KospidaqStrategyData['DayStatus'] = "SELL_DAY"
-                        KospidaqStrategyData['TryBuyCnt'] = 0
-                        continue
 
                     #코스닥 전략...돌파 매매..
                     if stock_code in ["233740","251340"]:
@@ -974,7 +854,7 @@ if ENABLE_ORDER_EXECUTION == True:
                                 KospidaqStrategyData['DayStatus'] = "BUY_DAY"
 
 
-                                msg = KospidaqStrategyData['StockName'] + " 1차 조건 통과(돌파 대기). 최종 조건 충족 시 주문합니다."
+                                msg = KospidaqStrategyData['StockName'] + " 돌파하면 매수합니다!!!"
                                 print(msg)
                                 telegram_alert.SendMessage(msg)
 
@@ -1017,7 +897,7 @@ if ENABLE_ORDER_EXECUTION == True:
                             KospidaqStrategyData['DayStatus'] = "BUY_DAY"
 
 
-                            msg = KospidaqStrategyData['StockName'] + " 1차 조건 통과(시가 매수 후보). 최종 조건 충족 시 주문합니다."
+                            msg = KospidaqStrategyData['StockName'] + " 조건을 만족했다면 매수합니다!!!"
                             print(msg)
                             telegram_alert.SendMessage(msg)
 
@@ -1179,13 +1059,14 @@ if ENABLE_ORDER_EXECUTION == True:
                                     CutRate = 0.4
 
                                     if stock_code == "251340":
-                                        CutRate = KOSDAQ_251340_CUT_RATE
+                                        CutRate = 0.4
 
                                     else:
+
                                         if PrevClosePrice > stock_data['ma60_before'].values[0]:
-                                            CutRate = KOSDAQ_233740_CUT_RATE_BULL
+                                            CutRate = 0.4
                                         else:
-                                            CutRate = KOSDAQ_233740_CUT_RATE_BEAR
+                                            CutRate = 0.3
 
 
                                     
@@ -1195,29 +1076,7 @@ if ENABLE_ORDER_EXECUTION == True:
 
                                     CurrentPrice = KisKR.GetCurrentPrice(stock_code)  
 
-                                    # v6b 핵심: 233740 적응형 하드스탑
-                                    hard_stop_trigger = False
-                                    hard_stop_price = 0.0
-                                    if ENABLE_233740_HARD_STOP and stock_code == "233740" and stock_avg_price > 0:
-                                        prev_range_ratio = (stock_data['prevHigh'].values[0] - stock_data['prevLow'].values[0]) / max(1.0, stock_data['prevClose'].values[0])
-                                        weak_trend = stock_data['prevClose'].values[0] <= stock_data['ma20_before'].values[0]
-                                        is_high_vol = prev_range_ratio >= HARD_STOP_VOL_TH
-
-                                        hard_stop_pct = HARD_STOP_233740_PCT_BASE
-                                        if weak_trend and is_high_vol:
-                                            hard_stop_pct = HARD_STOP_233740_PCT_TIGHT
-
-                                        hard_stop_price = stock_avg_price * (1.0 - hard_stop_pct)
-                                        if CurrentPrice <= hard_stop_price or stock_data['low'].values[0] <= hard_stop_price:
-                                            hard_stop_trigger = True
-
-                                    cut_trigger = False
-                                    if stock_code in CLOSE_BASED_CUT_CODES:
-                                        cut_trigger = stock_data['close'].values[0] <= CutPrice
-                                    else:
-                                        cut_trigger = (CurrentPrice <= CutPrice or stock_data['low'].values[0] <= CutPrice)
-
-                                    if cut_trigger or hard_stop_trigger:
+                                    if CurrentPrice <= CutPrice or stock_data['low'].values[0] <= CutPrice :
                                         
                                         # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가 - 매도 시 트레일링 스탑 취소
                                         if KospidaqStrategyData.get('IsTrailingStopSet') == True:
@@ -1235,11 +1094,6 @@ if ENABLE_ORDER_EXECUTION == True:
                                         msg = KospidaqStrategyData['StockName']  + " 매도조건 충족! 남은 물량 전량 매도!!! " + str(stock_revenue_money) + " 수익 확정!! 수익률:" + str(stock_revenue_rate) + "%"
                                         print(msg)
                                         telegram_alert.SendMessage(msg)
-
-                                        if hard_stop_trigger:
-                                            msg = KospidaqStrategyData['StockName'] + " 하드스탑 트리거 발동(기준가: " + str(round(hard_stop_price, 2)) + ")"
-                                            print(msg)
-                                            telegram_alert.SendMessage(msg)
 
 
                                         if stock_revenue_rate < 0:
@@ -1269,17 +1123,6 @@ if ENABLE_ORDER_EXECUTION == True:
                                         
 
 
-                                    else:
-                                        diag_msg = (
-                                            KospidaqStrategyData['StockName']
-                                            + " 매도 보류(코스닥): Cut 미충족 "
-                                            + f"[현재가:{round(CurrentPrice,2)} / Cut:{round(CutPrice,2)} / 종가:{round(stock_data['close'].values[0],2)}]"
-                                        )
-                                        if stock_code == "233740" and stock_avg_price > 0:
-                                            diag_msg += f" [HardStop:{round(hard_stop_price,2)}]"
-                                        SendSellDiagOnce(KospidaqStrategyData, diag_msg)
-
-
                                     
                                 else:
                                     KospidaqStrategyData['Status'] = "REST" 
@@ -1298,7 +1141,7 @@ if ENABLE_ORDER_EXECUTION == True:
 
                                     if stock_code == "252670":
                                         
-                                        if stock_data['Disparity11'].values[0] > KOSPI_252670_DISPARITY11_TH:
+                                        if stock_data['Disparity11'].values[0] > 105:
                                             #
                                             if  PrevClosePrice < stock_data['ma3_before'].values[0]: 
                                                 IsSellGo = True
@@ -1375,26 +1218,6 @@ if ENABLE_ORDER_EXECUTION == True:
                                         ###########################################################
 
                                     
-                                    else:
-                                        if stock_code == "252670":
-                                            diag_msg = (
-                                                KospidaqStrategyData['StockName']
-                                                + " 매도 보류(코스피): 조건 미충족 "
-                                                + f"[Disparity11:{round(stock_data['Disparity11'].values[0],2)} / th:{KOSPI_252670_DISPARITY11_TH} / prevClose:{round(PrevClosePrice,2)}]"
-                                            )
-                                        else:
-                                            total_volume = (stock_data['prevVolume'].values[0] + stock_data['prevVolume2'].values[0] + stock_data['prevVolume3'].values[0]) / 3.0
-                                            disparity = stock_data['Disparity20'].values[0]
-                                            diag_msg = (
-                                                KospidaqStrategyData['StockName']
-                                                + " 매도 보류(코스피): 홀드조건 충족 "
-                                                + f"[prevLow2:{round(stock_data['prevLow2'].values[0],2)} prevLow:{round(stock_data['prevLow'].values[0],2)} "
-                                                + f"prevVol:{int(stock_data['prevVolume'].values[0])} avgVol3:{int(total_volume)} "
-                                                + f"Disparity20:{round(disparity,2)}]"
-                                            )
-                                        SendSellDiagOnce(KospidaqStrategyData, diag_msg)
-
-                                    
                                 else:
                                     KospidaqStrategyData['Status'] = "REST" 
                                     KospidaqStrategyData['DayStatus'] = "NONE"
@@ -1406,7 +1229,6 @@ if ENABLE_ORDER_EXECUTION == True:
 
 
             ### 매수 파트 ###
-            my_stock_list_live = KisKR.GetMyStockList()
             for KospidaqStrategyData in KospidaqStrategyList:
                 pprint.pprint(KospidaqStrategyData)
 
@@ -1423,16 +1245,6 @@ if ENABLE_ORDER_EXECUTION == True:
 
                     #현재가!
                     CurrentPrice = KisKR.GetCurrentPrice(stock_code)        
-
-                    # 실잔고 우선 가드: 보유 중이면 상태를 복구하고 당일 재매수 진입 차단
-                    # 단, INVESTING_TRY는 아래 체결확인/트레일링 설정 로직을 타야 하므로 제외한다.
-                    live_amt = GetHoldingAmtFromList(my_stock_list_live, stock_code)
-                    if live_amt > 0 and KospidaqStrategyData['Status'] != "INVESTING_TRY":
-                        KospidaqStrategyData['Status'] = "INVESTING"
-                        if KospidaqStrategyData['DayStatus'] == "BUY_DAY":
-                            KospidaqStrategyData['DayStatus'] = "NONE"
-                        KospidaqStrategyData['TryBuyCnt'] = 0
-                        continue
                     
                 
                     #해당 ETF가 매수하는 날 상태이다!
@@ -1451,120 +1263,86 @@ if ENABLE_ORDER_EXECUTION == True:
                                 if my_stock['StockCode'] == KospidaqStrategyData['StockCode']:
                                     stock_amt = int(my_stock['StockAmt'])
                                     break
+                                
+                        #실제로 1주라도 매수가 되었다면 투자중 상태로 변경!!!
+                        if stock_amt > 0:
+                            KospidaqStrategyData['Status'] = "INVESTING"
+                            KospidaqStrategyData['DayStatus'] = "NONE"
                             
-                            #실제로 1주라도 매수가 되었다면 투자중 상태로 변경!!!
-                            if stock_amt > 0:
-                                KospidaqStrategyData['Status'] = "INVESTING"
-                                KospidaqStrategyData['DayStatus'] = "NONE"
-                                
-                                # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가 - 보유 물량의 절반에 트레일링 스탑 설정
-                                if KospidaqStrategyData.get('IsTrailingStopSet') == None:
-                                    KospidaqStrategyData['IsTrailingStopSet'] = False
-                                
-                                if KospidaqStrategyData['IsTrailingStopSet'] == False:
-                                    stock_data_now = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
-                                    if len(stock_data_now) == 1:
-                                        # 최근 N개 캔들 고가-저가 평균의 M배를 콜백비율로 설정
-                                        hl_avg = stock_data_now['hl_range_avg'].values[0]
-                                        current_price = KisKR.GetCurrentPrice(stock_code)
-                                        if current_price > 0 and hl_avg > 0:
-                                            callback_rate = (hl_avg * TRAILING_STOP_MULTIPLIER / current_price) * 100.0
-                                            
-                                            # 최소 콜백비율 보장
-                                            if callback_rate < TRAILING_STOP_MIN_RATE:
-                                                callback_rate = TRAILING_STOP_MIN_RATE
-                                            
-                                            KospidaqStrategyData['TrailingStopCallbackRate'] = callback_rate
-                                            try:
-                                                KIS_KR_StopTrader.MakeTrailingStopLoss(stock_code, callback_rate, None, True)
-                                                KospidaqStrategyData['IsTrailingStopSet'] = True
-                                                time.sleep(0.5)
-
-                                                msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중(보유물량 절반 트레일링스탑 설정, 콜백: " + str(round(callback_rate, 2)) + "%)"
-                                                print(msg)
-                                                telegram_alert.SendMessage(msg)
-                                            except Exception as e:
-                                                KospidaqStrategyData['IsTrailingStopSet'] = False
-                                                msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중(트레일링스탑 등록 실패, 다음 주기 재시도): " + str(e)
-                                                print(msg)
-                                                telegram_alert.SendMessage(msg)
-                                        else:
-                                            msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중입니다."
-                                            print(msg)
-                                            telegram_alert.SendMessage(msg)
+                            # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가 - 보유 물량의 절반에 트레일링 스탑 설정
+                            if KospidaqStrategyData.get('IsTrailingStopSet') == None:
+                                KospidaqStrategyData['IsTrailingStopSet'] = False
+                            
+                            if KospidaqStrategyData['IsTrailingStopSet'] == False:
+                                stock_data_now = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
+                                if len(stock_data_now) == 1:
+                                    # 최근 N개 캔들 고가-저가 평균의 M배를 콜백비율로 설정
+                                    hl_avg = stock_data_now['hl_range_avg'].values[0]
+                                    current_price = KisKR.GetCurrentPrice(stock_code)
+                                    if current_price > 0 and hl_avg > 0:
+                                        callback_rate = (hl_avg * TRAILING_STOP_MULTIPLIER / current_price) * 100.0
+                                        
+                                        # 최소 콜백비율 보장
+                                        if callback_rate < TRAILING_STOP_MIN_RATE:
+                                            callback_rate = TRAILING_STOP_MIN_RATE
+                                        
+                                        KospidaqStrategyData['TrailingStopCallbackRate'] = callback_rate
+                                        KIS_KR_StopTrader.MakeTrailingStopLoss(stock_code, callback_rate, None, True)
+                                        KospidaqStrategyData['IsTrailingStopSet'] = True
+                                        time.sleep(0.5)
+                                        
+                                        msg = KospidaqStrategyData['StockName'] + " 투자중! 보유물량 절반에 트레일링스탑 설정 (콜백: " + str(round(callback_rate, 2)) + "%)"
+                                        print(msg)
+                                        telegram_alert.SendMessage(msg)
                                     else:
-                                        msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중입니다."
+                                        msg = KospidaqStrategyData['StockName'] + " 투자중이에요!!"
                                         print(msg)
                                         telegram_alert.SendMessage(msg)
                                 else:
-                                    msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중입니다."
+                                    msg = KospidaqStrategyData['StockName'] + " 투자중이에요!!"
                                     print(msg)
                                     telegram_alert.SendMessage(msg)
-                                
-                                # [2026.01.23] 추가 매수 감지 - 첫 매수 체결 시 PrevStockAmt 초기화
-                                KospidaqStrategyData['PrevStockAmt'] = stock_amt
-                                KospidaqStrategyData['ReorderTryCnt'] = 0
-                                KospidaqStrategyData['LastReorderTs'] = 0
-
-                            #아니라면 알림으로 알려준다!!
                             else:
-                        
-                                msg = KospidaqStrategyData['StockName'] + " 주문 후 체결 미확인(0주). 수량 감산하여 재주문 시도합니다."
+                                msg = KospidaqStrategyData['StockName'] + " 투자중이에요!!"
+                                print(msg)
+                                telegram_alert.SendMessage(msg)
+                            
+                            # [2026.01.23] 추가 매수 감지 - 첫 매수 체결 시 PrevStockAmt 초기화
+                            KospidaqStrategyData['PrevStockAmt'] = stock_amt
+
+
+                        #아니라면 알림으로 알려준다!!
+                        else:
+                    
+                            msg = KospidaqStrategyData['StockName'] + "  조건을 만족하여 매수 시도했는데 아직 1주도 매수되지 않았어요! 감산해서 매수시도 합니다! "
+                            print(msg)
+                            telegram_alert.SendMessage(msg)
+
+
+                            if KospidaqStrategyData.get('TryBuyCnt') == None:
+                                KospidaqStrategyData['TryBuyCnt'] = 1
+
+
+                            KospidaqStrategyData['TryBuyCnt'] = int(KospidaqStrategyData['TryBuyCnt'] * 0.7)
+
+                            if KospidaqStrategyData['TryBuyCnt'] > 1:
+                                returnData = KisKR.MakeBuyMarketOrder(KospidaqStrategyData['StockCode'],KospidaqStrategyData['TryBuyCnt'],True) #30%감소된 수량으로 매수 시도!!
+                                KospidaqStrategyData['LastOrderResp'] = returnData
+
+                                msg = KospidaqStrategyData['StockName'] + "  매수 시도!!! " + str(returnData)
                                 print(msg)
                                 telegram_alert.SendMessage(msg)
 
+                            else:
 
-                                if KospidaqStrategyData.get('TryBuyCnt') == None:
-                                    KospidaqStrategyData['TryBuyCnt'] = 1
-                                if KospidaqStrategyData.get('ReorderTryCnt') == None:
-                                    KospidaqStrategyData['ReorderTryCnt'] = 0
-                                if KospidaqStrategyData.get('LastReorderTs') == None:
-                                    KospidaqStrategyData['LastReorderTs'] = 0
+                                KospidaqStrategyData['Status'] = "REST"
+                                KospidaqStrategyData['DayStatus'] = "NONE"
+                                
 
-                                now_ts = int(time.time())
-                                if int(KospidaqStrategyData['ReorderTryCnt']) >= REORDER_MAX_TRIES:
-                                    KospidaqStrategyData['Status'] = "REST"
-                                    KospidaqStrategyData['DayStatus'] = "NONE"
-                                    msg = KospidaqStrategyData['StockName'] + " 재주문 상한 도달(" + str(REORDER_MAX_TRIES) + "회). 오늘 주문 중단."
-                                    print(msg)
-                                    telegram_alert.SendMessage(msg)
-                                    continue
-
-                                if now_ts - int(KospidaqStrategyData['LastReorderTs']) < REORDER_COOLDOWN_SEC:
-                                    msg = KospidaqStrategyData['StockName'] + " 재주문 쿨다운 중(" + str(REORDER_COOLDOWN_SEC) + "초). 다음 주기에 재확인."
-                                    print(msg)
-                                    telegram_alert.SendMessage(msg)
-                                    continue
-
-
-                                KospidaqStrategyData['TryBuyCnt'] = int(KospidaqStrategyData['TryBuyCnt'] * 0.7)
-
-                                if KospidaqStrategyData['TryBuyCnt'] > 1:
-                                    returnData = KisKR.MakeBuyMarketOrder(KospidaqStrategyData['StockCode'],KospidaqStrategyData['TryBuyCnt'],True) #30%감소된 수량으로 매수 시도!!
-                                    KospidaqStrategyData['ReorderTryCnt'] = int(KospidaqStrategyData['ReorderTryCnt']) + 1
-                                    KospidaqStrategyData['LastReorderTs'] = now_ts
-
-                                    if IsOrderAccepted(returnData):
-                                        msg = KospidaqStrategyData['StockName'] + " 재주문 전송 성공: " + str(returnData)
-                                    else:
-                                        if IsHardRejectOrder(returnData):
-                                            KospidaqStrategyData['Status'] = "REST"
-                                            KospidaqStrategyData['DayStatus'] = "NONE"
-                                            msg = KospidaqStrategyData['StockName'] + " 재주문 접수 실패(계좌/권한 제한). 당일 재시도 중단: " + str(returnData)
-                                        else:
-                                            msg = KospidaqStrategyData['StockName'] + " 재주문 접수 실패: " + str(returnData)
-                                    print(msg)
-                                    telegram_alert.SendMessage(msg)
-
-                                else:
-
-                                    KospidaqStrategyData['Status'] = "REST"
-                                    KospidaqStrategyData['DayStatus'] = "NONE"
-                                    
-
-                                    msg = KospidaqStrategyData['StockName'] + " 주문 중단(체결 미확인/수량부족)."
-                                    print(msg)
-                                    telegram_alert.SendMessage(msg)
+                                fail_detail = KospidaqStrategyData.get('LastOrderResp')
+                                msg = KospidaqStrategyData['StockName'] + "  매수 실패!!! 사유: " + FormatOrderResp(fail_detail)
+                                print(msg)
+                                telegram_alert.SendMessage(msg)
 
 
                                 
@@ -1693,7 +1471,6 @@ if ENABLE_ORDER_EXECUTION == True:
 
                                     
                                     if Rate > 0 and AdjustRate > 0:
-                                        InvestMoneyCell *= DateSiGaLogicDoneDict.get('ExposureRate', 1.0)
                                         
                                         #할당된 투자금이 남은돈보다 많다면 남은 돈만큼으로 세팅!
                                         if RemainInvestMoney < InvestMoneyCell:
@@ -1723,37 +1500,29 @@ if ENABLE_ORDER_EXECUTION == True:
                                         
                                         ######## 시장가 1번에 고고 ##########
                                         #시장가로 바로고!
-                                        order_data = KisKR.MakeBuyMarketOrder(KospidaqStrategyData['StockCode'],BuyAmt,True)
-                                        print("BUY_ORDER_RESULT:", KospidaqStrategyData['StockCode'], order_data)
+                                        returnData = KisKR.MakeBuyMarketOrder(KospidaqStrategyData['StockCode'],BuyAmt,True)
+                                        KospidaqStrategyData['LastOrderResp'] = returnData
 
-                                        if IsOrderAccepted(order_data):
+                                        if IsOrderAccepted(returnData):
                                             DateSiGaLogicDoneDict['InvestCnt'] += 1
                                             #파일에 저장
                                             with open(siga_logic_file_path, 'w') as outfile:
                                                 json.dump(DateSiGaLogicDoneDict, outfile)
 
                                             RemainInvestMoney -= InvestMoneyCell
-
                                             KospidaqStrategyData['Status'] = "INVESTING_TRY"
-                                            KospidaqStrategyData['ReorderTryCnt'] = 0
-                                            KospidaqStrategyData['LastReorderTs'] = 0
 
-                                            msg = KospidaqStrategyData['StockName'] + " 매수 주문 전송 완료. 체결 확인 대기중."
+                                            msg = KospidaqStrategyData['StockName'] + "  조건을 만족하여 매수 주문 접수!! (" + FormatOrderResp(returnData) + ")"
                                             print(msg)
                                             telegram_alert.SendMessage(msg)
                                         else:
-                                            if IsHardRejectOrder(order_data):
-                                                KospidaqStrategyData['Status'] = "REST"
-                                                KospidaqStrategyData['DayStatus'] = "NONE"
-                                                msg = KospidaqStrategyData['StockName'] + " 매수 주문 접수 실패(계좌/권한 제한, 당일 재시도 중단): " + str(order_data)
-                                            else:
-                                                msg = KospidaqStrategyData['StockName'] + " 매수 주문 접수 실패(" + str(order_data) + "). 재평가 대기."
+                                            msg = KospidaqStrategyData['StockName'] + "  매수 주문 접수 실패!! (" + FormatOrderResp(returnData) + ")"
                                             print(msg)
                                             telegram_alert.SendMessage(msg)
                                     else:
 
 
-                                        msg = KospidaqStrategyData['StockName'] + " 돌파 감지됐지만 최종 필터 불충족으로 미주문."
+                                        msg = KospidaqStrategyData['StockName'] + "  돌파했지만 추세가 안좋아 매수 안함! "
                                         print(msg)
                                         telegram_alert.SendMessage(msg)
                     
@@ -1779,7 +1548,7 @@ if ENABLE_ORDER_EXECUTION == True:
                                     if stock_code == "252670":
 
                                         #이거변경
-                                        if PrevClosePrice > stock_data['ma3_before'].values[0]  and PrevClosePrice > stock_data['ma6_before'].values[0]  and PrevClosePrice > stock_data['ma19_before'].values[0] and stock_data['prevRSI'].values[0] < KOSPI_252670_BUY_RSI_MAX and stock_data['prevRSI2'].values[0] < stock_data['prevRSI'].values[0]:
+                                        if PrevClosePrice > stock_data['ma3_before'].values[0]  and PrevClosePrice > stock_data['ma6_before'].values[0]  and PrevClosePrice > stock_data['ma19_before'].values[0] and stock_data['prevRSI'].values[0] < 70 and stock_data['prevRSI2'].values[0] < stock_data['prevRSI'].values[0]:
                                             if (stock_data['prevVolume2'].values[0] < stock_data['prevVolume'].values[0]) and (stock_data['prevLow2'].values[0] < stock_data['prevLow'].values[0]) and PrevClosePrice > stock_data['ma60_before'].values[0] and stock_data['ma60_before2'].values[0] < stock_data['ma60_before'].values[0]  and stock_data['ma3_before'].values[0]  > stock_data['ma6_before'].values[0]  > stock_data['ma19_before'].values[0]  :
                                                 IsBuyGo = True
 
@@ -1787,11 +1556,10 @@ if ENABLE_ORDER_EXECUTION == True:
 
                                         Disparity = stock_data['Disparity20'].values[0] 
                                         
-                                        if (stock_data['prevLow2'].values[0] < stock_data['prevLow'].values[0]) and (Disparity < KOSPI_122630_BUY_DISPARITY_LOW or Disparity > KOSPI_122630_BUY_DISPARITY_HIGH) and stock_data['prevRSI'].values[0] < KOSPI_122630_BUY_RSI_MAX :
+                                        if (stock_data['prevLow2'].values[0] < stock_data['prevLow'].values[0]) and (Disparity < 98 or Disparity > 106) and stock_data['prevRSI'].values[0] < 80 :
                                             IsBuyGo = True
                         
                                         
-                                    IsBuyOrderSent = False
                                     if IsBuyGo == True:
                                         
                         
@@ -1815,8 +1583,6 @@ if ENABLE_ORDER_EXECUTION == True:
                                             #if DateSiGaLogicDoneDict['InvestCnt']  >= 1:
                                             #    InvestMoneyCell = RemainInvestMoney * Rate * AdjustRate
 
-
-                                        InvestMoneyCell *= DateSiGaLogicDoneDict.get('ExposureRate', 1.0)
 
                                         #할당된 투자금이 남은돈보다 많다면 남은 돈만큼으로 세팅!
                                         if RemainInvestMoney < InvestMoneyCell:
@@ -1844,59 +1610,38 @@ if ENABLE_ORDER_EXECUTION == True:
                                         
                                         ######## 시장가 1번에 고고 ##########
                                         #시장가로 바로고!
-                                        order_data = KisKR.MakeBuyMarketOrder(KospidaqStrategyData['StockCode'],BuyAmt,True)
-                                        print("BUY_ORDER_RESULT:", KospidaqStrategyData['StockCode'], order_data)
+                                        returnData = KisKR.MakeBuyMarketOrder(KospidaqStrategyData['StockCode'],BuyAmt,True)
+                                        KospidaqStrategyData['LastOrderResp'] = returnData
 
-                                        if IsOrderAccepted(order_data):
+                                        if IsOrderAccepted(returnData):
                                             DateSiGaLogicDoneDict['InvestCnt'] += 1
                                             #파일에 저장
                                             with open(siga_logic_file_path, 'w') as outfile:
                                                 json.dump(DateSiGaLogicDoneDict, outfile)
 
                                             RemainInvestMoney -= InvestMoneyCell
-
                                             KospidaqStrategyData['Status'] = "INVESTING_TRY"
-                                            KospidaqStrategyData['ReorderTryCnt'] = 0
-                                            KospidaqStrategyData['LastReorderTs'] = 0
-                                            IsBuyOrderSent = True
 
-                                            msg = KospidaqStrategyData['StockName'] + " 매수 주문 전송 완료. 체결 확인 대기중."
+                                            msg = KospidaqStrategyData['StockName'] + "  조건을 만족하여 매수 주문 접수!! (" + FormatOrderResp(returnData) + ")"
                                             print(msg)
                                             telegram_alert.SendMessage(msg)
                                         else:
-                                            if IsHardRejectOrder(order_data):
-                                                KospidaqStrategyData['Status'] = "REST"
-                                                KospidaqStrategyData['DayStatus'] = "NONE"
-                                                DateSiGaLogicDoneDict[stock_code] = day_n
-                                                with open(siga_logic_file_path, 'w') as outfile:
-                                                    json.dump(DateSiGaLogicDoneDict, outfile)
-                                                msg = KospidaqStrategyData['StockName'] + " 매수 주문 접수 실패(계좌/권한 제한, 당일 재시도 중단): " + str(order_data)
-                                            else:
-                                                msg = KospidaqStrategyData['StockName'] + " 매수 주문 접수 실패(" + str(order_data) + "). 다음 주기에 재평가."
+                                            msg = KospidaqStrategyData['StockName'] + "  매수 주문 접수 실패!! (" + FormatOrderResp(returnData) + ")"
                                             print(msg)
                                             telegram_alert.SendMessage(msg)
 
 
 
-                                    if IsBuyGo == True and IsBuyOrderSent == True:
-                                        msg = KospidaqStrategyData['StockName'] + " 오늘 매수 판단 완료(주문 전송됨, 체결 확인 대기)."
-                                    elif IsBuyGo == True and IsBuyOrderSent == False:
-                                        if KospidaqStrategyData.get('DayStatus') == "NONE":
-                                            msg = KospidaqStrategyData['StockName'] + " 오늘 매수 판단 완료(주문 접수 실패, 당일 재시도 중단)."
-                                        else:
-                                            msg = KospidaqStrategyData['StockName'] + " 오늘 매수 판단 완료(주문 접수 실패, 다음 주기 재평가)."
-                                    else:
-                                        msg = KospidaqStrategyData['StockName'] + " 오늘 매수 판단 완료(최종 조건 불충족, 미주문)."
+                                    msg = KospidaqStrategyData['StockName'] + " 오늘 매수여부 체크 완료!"
                                     print(msg)
                                     telegram_alert.SendMessage(msg)
 
 
                                     #시가 매수 로직 안으로 들어왔다면 날자를 바꿔준다!!
-                                    if IsBuyGo == False or IsBuyOrderSent == True:
-                                        DateSiGaLogicDoneDict[stock_code] = day_n
-                                        #파일에 저장
-                                        with open(siga_logic_file_path, 'w') as outfile:
-                                            json.dump(DateSiGaLogicDoneDict, outfile)
+                                    DateSiGaLogicDoneDict[stock_code] = day_n
+                                    #파일에 저장
+                                    with open(siga_logic_file_path, 'w') as outfile:
+                                        json.dump(DateSiGaLogicDoneDict, outfile)
 
             #파일에 저장
             with open(data_file_path, 'w') as outfile:
