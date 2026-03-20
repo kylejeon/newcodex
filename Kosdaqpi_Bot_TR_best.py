@@ -166,6 +166,8 @@ InvestRate = 0.85 #총 평가금액에서 해당 봇에게 할당할 총 금액�
 #####################################################################################################################################
 
 # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가 - 트레일링 스탑 콜백비율 설정
+# 백테스트(v7_best)와 최대한 유사하게 맞추기 위해 기본은 비활성화한다.
+ENABLE_BOT_TRAILING_STOP = os.getenv("ENABLE_BOT_TRAILING_STOP", "0") == "1"
 TRAILING_STOP_CANDLE_COUNT = 20  # 콜백비율 계산에 사용할 캔들 개수
 TRAILING_STOP_MULTIPLIER = 2.0   # 고가-저가 평균에 곱할 배수
 TRAILING_STOP_MIN_RATE = 2.0     # 최소 콜백비율 (%)
@@ -247,6 +249,59 @@ def GetHoldingAmtFromList(my_stock_list, stock_code):
     except Exception:
         return 0
     return 0
+
+
+def EnsureTrailingStopForHolding(strategy_data, stock_code, stock_data_now, stock_amt, reason_text):
+    if ENABLE_BOT_TRAILING_STOP is not True:
+        strategy_data['IsTrailingStopSet'] = False
+        strategy_data['TrailingStopCallbackRate'] = 0
+        return False
+
+    if stock_amt <= 0:
+        return False
+
+    if strategy_data.get('IsTrailingStopSet') is None:
+        strategy_data['IsTrailingStopSet'] = False
+    if strategy_data.get('TrailingStopCallbackRate') is None:
+        strategy_data['TrailingStopCallbackRate'] = 0
+
+    if strategy_data['IsTrailingStopSet'] is True:
+        return False
+
+    if len(stock_data_now) != 1:
+        return False
+
+    hl_avg = stock_data_now['hl_range_avg'].values[0]
+    current_price = KisKR.GetCurrentPrice(stock_code)
+    if current_price <= 0 or hl_avg <= 0:
+        return False
+
+    callback_rate = (hl_avg * TRAILING_STOP_MULTIPLIER / current_price) * 100.0
+    if callback_rate < TRAILING_STOP_MIN_RATE:
+        callback_rate = TRAILING_STOP_MIN_RATE
+
+    strategy_data['TrailingStopCallbackRate'] = callback_rate
+    try:
+        KIS_KR_StopTrader.MakeTrailingStopLoss(stock_code, callback_rate, None, True)
+        strategy_data['IsTrailingStopSet'] = True
+        time.sleep(0.5)
+        msg = (
+            strategy_data['StockName']
+            + " "
+            + reason_text
+            + " (보유물량 절반 트레일링스탑 설정, 콜백: "
+            + str(round(callback_rate, 2))
+            + "%)"
+        )
+        print(msg)
+        telegram_alert.SendMessage(msg)
+        return True
+    except Exception as e:
+        strategy_data['IsTrailingStopSet'] = False
+        msg = strategy_data['StockName'] + " " + reason_text + " (트레일링스탑 등록 실패, 다음 주기 재시도): " + str(e)
+        print(msg)
+        telegram_alert.SendMessage(msg)
+        return False
 
 
 def SendSellDiagOnce(strategy_data, msg):
@@ -409,6 +464,70 @@ except Exception as e:
     #파일에 저장
     with open(data_file_path, 'w') as outfile:
         json.dump(KospidaqStrategyList, outfile)
+
+
+# 실보유 잔고를 기준으로 상태를 먼저 동기화한다.
+# 다른 PC에서 주문된 포지션이 있어도 여기서 INVESTING 상태로 맞춘다.
+for stock_code in InvestStockList:
+    KospidaqStrategyData = GetKospidaqStrategyData(stock_code, KospidaqStrategyList)
+    if KospidaqStrategyData is None:
+        KospidaqStrategyData = dict()
+        KospidaqStrategyData['StockCode'] = stock_code
+        KospidaqStrategyData['StockName'] = KisKR.GetStockName(stock_code)
+        KospidaqStrategyData['Status'] = "REST"
+        KospidaqStrategyData['DayStatus'] = "NONE"
+        KospidaqStrategyData['TargetPrice'] = 0
+        KospidaqStrategyData['TryBuyCnt'] = 0
+        KospidaqStrategyData['IsTrailingStopSet'] = False
+        KospidaqStrategyData['TrailingStopCallbackRate'] = 0
+        KospidaqStrategyData['PrevStockAmt'] = 0
+        KospidaqStrategyData['ReorderTryCnt'] = 0
+        KospidaqStrategyData['LastReorderTs'] = 0
+        KospidaqStrategyData['LastSellDiagDate'] = ""
+        KospidaqStrategyList.append(KospidaqStrategyData)
+
+    holding_amt = GetHoldingAmtFromList(MyStockList, stock_code)
+    if holding_amt > 0:
+        KospidaqStrategyData['Status'] = "INVESTING"
+        KospidaqStrategyData['PrevStockAmt'] = holding_amt
+        KospidaqStrategyData['TryBuyCnt'] = 0
+    else:
+        if KospidaqStrategyData['Status'] not in ["INVESTING_TRY", "SELL_DONE_CHECK"]:
+            KospidaqStrategyData['Status'] = "REST"
+        KospidaqStrategyData['PrevStockAmt'] = 0
+        KospidaqStrategyData['IsTrailingStopSet'] = False
+        KospidaqStrategyData['TrailingStopCallbackRate'] = 0
+
+with open(data_file_path, 'w') as outfile:
+    json.dump(KospidaqStrategyList, outfile)
+
+
+def DisableAllStrategyTrailingStops():
+    changed = False
+
+    for stock_code in InvestStockList:
+        strategy_data = GetKospidaqStrategyData(stock_code, KospidaqStrategyList)
+        if strategy_data is None:
+            continue
+
+        try:
+            KIS_KR_StopTrader.CancelOrderByTicker(stock_code, "TrailingStopLoss")
+            time.sleep(0.2)
+        except Exception as e:
+            print(stock_code, " trailing cancel ignored:", e)
+
+        if strategy_data.get('IsTrailingStopSet') != False or strategy_data.get('TrailingStopCallbackRate', 0) != 0:
+            strategy_data['IsTrailingStopSet'] = False
+            strategy_data['TrailingStopCallbackRate'] = 0
+            changed = True
+
+    if changed:
+        with open(data_file_path, 'w') as outfile:
+            json.dump(KospidaqStrategyList, outfile)
+
+
+if ENABLE_BOT_TRAILING_STOP is not True:
+    DisableAllStrategyTrailingStops()
 
 
 ###################################################################
@@ -1038,6 +1157,7 @@ if ENABLE_ORDER_EXECUTION == True:
         if day_str == DateData['Date']: #오늘 할일을 한다!
 
             ### 매도 파트 ###
+            MyStockList = KisKR.GetMyStockList()
             for KospidaqStrategyData in KospidaqStrategyList:
                 pprint.pprint(KospidaqStrategyData)
 
@@ -1054,6 +1174,19 @@ if ENABLE_ORDER_EXECUTION == True:
 
                     #현재가!
                     CurrentPrice = KisKR.GetCurrentPrice(stock_code)        
+
+                    # 실보유 상태와 트레일링 상태가 어긋난 경우 먼저 복구한다.
+                    if KospidaqStrategyData['Status'] == "INVESTING":
+                        live_stock_amt = GetHoldingAmtFromList(MyStockList, stock_code)
+                        if live_stock_amt > 0 and KospidaqStrategyData.get('IsTrailingStopSet') != True:
+                            EnsureTrailingStopForHolding(
+                                KospidaqStrategyData,
+                                stock_code,
+                                stock_data,
+                                live_stock_amt,
+                                "보유 상태 재동기화. 투자중"
+                            )
+                            KospidaqStrategyData['PrevStockAmt'] = live_stock_amt
                     
 
 
@@ -1158,7 +1291,26 @@ if ENABLE_ORDER_EXECUTION == True:
                                                 msg = stock_name + " 추가 매수 감지! 트레일링스탑 재설정 (" + str(prev_amt) + "주 → " + str(stock_amt) + "주, 콜백: " + str(round(callback_rate, 2)) + "%)"
                                                 print(msg)
                                                 telegram_alert.SendMessage(msg)
+                                else:
+                                    stock_data_now = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
+                                    EnsureTrailingStopForHolding(
+                                        KospidaqStrategyData,
+                                        stock_code,
+                                        stock_data_now,
+                                        stock_amt,
+                                        "보유 상태 재동기화. 투자중"
+                                    )
                                 
+                                KospidaqStrategyData['PrevStockAmt'] = stock_amt
+                            elif stock_amt > 0 and KospidaqStrategyData.get('IsTrailingStopSet') != True:
+                                stock_data_now = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
+                                EnsureTrailingStopForHolding(
+                                    KospidaqStrategyData,
+                                    stock_code,
+                                    stock_data_now,
+                                    stock_amt,
+                                    "보유 상태 재동기화. 투자중"
+                                )
                                 KospidaqStrategyData['PrevStockAmt'] = stock_amt
                             
                             # 수량 감소 = 트레일링 스탑 체결 or 매도
@@ -1458,45 +1610,15 @@ if ENABLE_ORDER_EXECUTION == True:
                                 KospidaqStrategyData['DayStatus'] = "NONE"
                                 
                                 # [2026.01.23] 절반 트레일링 스탑 정리 로직 추가 - 보유 물량의 절반에 트레일링 스탑 설정
-                                if KospidaqStrategyData.get('IsTrailingStopSet') == None:
-                                    KospidaqStrategyData['IsTrailingStopSet'] = False
-                                
-                                if KospidaqStrategyData['IsTrailingStopSet'] == False:
-                                    stock_data_now = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
-                                    if len(stock_data_now) == 1:
-                                        # 최근 N개 캔들 고가-저가 평균의 M배를 콜백비율로 설정
-                                        hl_avg = stock_data_now['hl_range_avg'].values[0]
-                                        current_price = KisKR.GetCurrentPrice(stock_code)
-                                        if current_price > 0 and hl_avg > 0:
-                                            callback_rate = (hl_avg * TRAILING_STOP_MULTIPLIER / current_price) * 100.0
-                                            
-                                            # 최소 콜백비율 보장
-                                            if callback_rate < TRAILING_STOP_MIN_RATE:
-                                                callback_rate = TRAILING_STOP_MIN_RATE
-                                            
-                                            KospidaqStrategyData['TrailingStopCallbackRate'] = callback_rate
-                                            try:
-                                                KIS_KR_StopTrader.MakeTrailingStopLoss(stock_code, callback_rate, None, True)
-                                                KospidaqStrategyData['IsTrailingStopSet'] = True
-                                                time.sleep(0.5)
-
-                                                msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중(보유물량 절반 트레일링스탑 설정, 콜백: " + str(round(callback_rate, 2)) + "%)"
-                                                print(msg)
-                                                telegram_alert.SendMessage(msg)
-                                            except Exception as e:
-                                                KospidaqStrategyData['IsTrailingStopSet'] = False
-                                                msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중(트레일링스탑 등록 실패, 다음 주기 재시도): " + str(e)
-                                                print(msg)
-                                                telegram_alert.SendMessage(msg)
-                                        else:
-                                            msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중입니다."
-                                            print(msg)
-                                            telegram_alert.SendMessage(msg)
-                                    else:
-                                        msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중입니다."
-                                        print(msg)
-                                        telegram_alert.SendMessage(msg)
-                                else:
+                                stock_data_now = combined_df[(combined_df.index == date) & (combined_df['stock_code'] == stock_code)]
+                                trailing_registered = EnsureTrailingStopForHolding(
+                                    KospidaqStrategyData,
+                                    stock_code,
+                                    stock_data_now,
+                                    stock_amt,
+                                    "체결 확인 완료. 투자중"
+                                )
+                                if trailing_registered == False:
                                     msg = KospidaqStrategyData['StockName'] + " 체결 확인 완료. 투자중입니다."
                                     print(msg)
                                     telegram_alert.SendMessage(msg)
