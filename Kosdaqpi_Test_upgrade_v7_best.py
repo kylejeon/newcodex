@@ -122,6 +122,11 @@ HARD_STOP_233740_PCT_TIGHT = 0.085  # 약세+고변동 구간
 HARD_STOP_233740_PCT_BASE = 0.125    # 일반 구간
 HARD_STOP_VOL_TH = 0.045            # 전일 변동폭 비율 임계치
 
+# 122630 급락 방어 하드스탑 (진입가 기준, 2020-2024 out-of-sample 영향 0, 2026-03-30 -18.54% 같은 단일 catastrophic trade 방어용)
+ENABLE_122630_HARD_STOP = True
+HARD_STOP_122630_PCT_TIGHT = 0.09   # 약세+고변동 구간
+HARD_STOP_122630_PCT_BASE = 0.12    # 일반 구간
+
 # 컷매도를 종가 기준(close<=CutPrice)으로 판정할 종목
 # 코스닥 분기(233740, 251340)에만 실질 영향이 있으므로 해당 종목만 명시
 CLOSE_BASED_CUT_CODES = {"233740","251340"}
@@ -622,6 +627,22 @@ for date in combined_df.index.unique():
                     IsSellGo = False
                     hold_days = calc_hold_days(date, investData.get('Date', str(date)))
 
+                    # 122630 하드스탑: InvestMoney 업데이트 전에 SellPrice/IsSellGo 확정
+                    if ENABLE_122630_HARD_STOP and stock_code == "122630":
+                        _prev_range_ratio = (stock_data['prevHigh'].values[0] - stock_data['prevLow'].values[0]) / stock_data['prevClose'].values[0]
+                        _weak_trend = stock_data['prevClose'].values[0] <= stock_data['ma20_before'].values[0]
+                        _is_high_vol = _prev_range_ratio >= HARD_STOP_VOL_TH
+                        _hs_pct = HARD_STOP_122630_PCT_BASE
+                        if _weak_trend and _is_high_vol:
+                            _hs_pct = HARD_STOP_122630_PCT_TIGHT
+                        _HardStopPrice = investData['BuyPrice'] * (1.0 - _hs_pct)
+                        if stock_data['low'].values[0] <= _HardStopPrice:
+                            IsSellGo = True
+                            if NowOpenPrice <= _HardStopPrice:
+                                SellPrice = NowOpenPrice
+                            else:
+                                SellPrice = _HardStopPrice
+
                     #매일 매일 투자금 반영!
                     if investData['DolPaCheck'] == False:
                         investData['DolPaCheck'] = True
@@ -634,7 +655,7 @@ for date in combined_df.index.unique():
                     Rate = (SellPrice* (1.0 - fee) - investData['BuyPrice']) / investData['BuyPrice']
 
                     RevenueRate = (Rate - fee)*100.0 #수익률 계산
-                    
+
                     # KODEX 200선물인버스2X
                     if stock_code == "252670":
                         

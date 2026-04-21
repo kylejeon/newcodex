@@ -1,0 +1,101 @@
+# 2026-04-21 세션 기록
+
+## 뭘 했나
+1. 전체 코드베이스 분석 — 시스템 구조 파악 완료
+   - Kosdaqpi_Bot_TR_daily.py: KOSPI/KOSDAQ ETF 4종 일봉 실매매 봇 (실사용 중)
+   - KIS_KR_StopTrader_System.py: Stop 주문 체결 데몬 (동반 필수)
+   - MNQ_1m_opening_bot.py: 별도 페이퍼 트레이딩 봇 (미국 선물, best_90_120)
+
+2. MNQ 전략 수익성 분석
+   - 기존 30일 yfinance 백테스트: +1.87%, PF 1.79, 20거래 (낙관적)
+   - Databento로 1년치 MNQ 1분봉 351,432행 다운로드 ($1.28)
+   - 1년 재백테스트 결과: -12.49%, PF 0.74, 301거래 → 완전히 적자 전략
+   - 30일 데이터는 cherry-picked 운 좋은 창이었음 확인
+
+3. 발견한 결함
+   - R/R 1:2.34 (평균 승 $18.79 vs 평균 패 $43.98)
+   - Break-even 승률 70.1% 필요, 실제 63.5% → 수학적 기대값 음수
+   - 모든 16개 변형(시간/틱 조합)에서 적자
+
+## 어디까지 됐나
+- 1년 백테스트 인프라 완비 (`run_mnq_1year_backtest.py` + `fetch_mnq_databento.py`)
+- 핵심 발견 CSV 저장: mnq_1year_variant_grid, monthly, weekday, 301 trades
+- Databento 키 .databento_key 파일에 저장 + gitignore 등록
+- pandas 2.3.3 대용량 rolling NaN 버그 우회 (numpy cumsum 기반)
+
+## 다음 뭐 해야 하나
+1. 사용자 결정 대기: 전략 폐기 vs 파라미터 튜닝
+2. 튜닝 한다면:
+   - TARGET_RETRACE 0.25→0.50
+   - STRETCH_ATR 1.4→2.5
+   - STOP_ATR_BUFFER 0.45→0.25
+   - MIN_IMPULSE_ATR 1.8→3.0
+   - 조합 그리드 서치 필요
+3. 페이퍼 봇은 계속 돌려서 실제 체결 vs 백테스트 오차 수집
+
+## 2026-04-21 후반: v7_best 3단계 개선 백테스트 검증
+- Step 1 (regime overlay): ENABLE_REGIME_OVERLAY=True, EXPOSURE_BULL/NEUTRAL/BEAR/CHOP=1.00/0.85/0.55/0.45, MIN_TOTAL_EXPOSURE=0.40
+  - +5.12%p 수익, -6.10%p MDD, -6.57%p 3월 손실
+- Step 2 (251340 매수 필터): prev_close > ma60 또는 Disparity20 > 105 시 매수 금지
+  - 251340: 18건→13건, 승률 27.8%→30.8%, 평균 -0.19%→+0.29% (적자→흑자)
+- Step 3 (122630 하드스탑): BASE=12%, TIGHT=9%
+  - 2026-03-30 -18.54% 같은 catastrophic loss 캡
+  - +3.49%p 수익, -0.97%p MDD
+- 누적 결과: 1년 수익 144.10%→157.15% (+13.05%p), MDD -35.20→-28.14 (-7.06%p), 3월 -24.94→-16.31 (-8.63%p)
+- 원본 Kosdaqpi_Test_upgrade_v7_best.py 와 실매매 daily 봇은 아직 미변경 (patch-기반 runner만 사용)
+- 파일: run_v7_regime_dd_compare.py, run_v7_improvements_stack.py, analyze_251340_failures.py
+- 사용자 승인 후 Kosdaqpi_Bot_TR_daily.py 에 반영 예정
+
+## 2020-2024 out-of-sample 검증 (중요!)
+- run_v7_improvements_2020_2024.py 로 5년 구간 재검증
+- baseline 2020-2024: +1204.97%, CAGR 67.26%, MDD -15.08% (엄청 강함)
+- step123_all 2020-2024: +595.09%, CAGR 47.44%, MDD -12.20%
+- 5년 기준 -610%p 수익 파괴, MDD 개선은 2.9%p 뿐
+- 연도별: 2020 +254→+165, 2022 +55→+19, 2023 +85→+72 모두 step123에서 알파 상실
+- 결론: Step 1+2는 2025-2026에 overfit된 패치. 실매매 반영 안 함 권장.
+- Step 3 (122630 하드스탑)만 안전 — 2020-2024 영향 0, 2026 수익 +3.49%p 보호 = free insurance
+
+## 2026-04-22: Step 3만 실매매 반영
+- Kosdaqpi_Test_upgrade_v7_best.py 에 122630 하드스탑 상수(ENABLE=True, TIGHT=0.09, BASE=0.12) + 로직 직접 삽입
+  - KOSPI 매도 블록 (line ~622), InvestMoney 업데이트 전에 SellPrice/IsSellGo 확정
+- Kosdaqpi_Bot_TR_daily.py 에 같은 상수 + MakeStopLoss 등록 로직 추가
+  - KOSPI 매도 보류 분기에서 등록 (233740 동일 패턴)
+  - StopTrader 데몬이 장중 감시하여 실행
+- 검증 결과 (verify_step3_applied.py):
+  - 최근 1년: +144.10% → +153.27% (+9.17%p), MDD -35.20 → -32.73 (+2.47%p), 3월 -24.94 → -21.06 (+3.88%p)
+  - 2020-2024: 완전 동일 (하드스탑 한 번도 발동 안 함, 공짜 보험 가설 검증)
+- Step 1/2는 overfit 판명되어 미적용
+- claude 브랜치 작업, main 머지는 CEO 수동
+
+## 다음 뭐 해야 하나
+- CEO가 claude 브랜치를 main에 머지
+- 머지 후 다음 거래일부터 봇이 자동으로 122630 하드스탑 등록
+- StopTrader 데몬이 정상 동작하는지 첫날 로그 모니터링 권장
+- 몇 주 후 실매매 vs 백테스트 괴리 측정 (compare_march2026_real_vs_v7_backtest.py 템플릿 활용)
+
+
+## 결정: MNQ/BTC 연구 중단, 코스닥·코스피 daily 봇에 집중
+- 사용자 결정: MNQ/BTC/ETH 전략 모두 폐기
+- v7_best (Kosdaqpi_Test_upgrade_v7_best.py) 1년 백테스트:
+  - 2025-04-21 ~ 2026-04-21: +144.10% (1104만 → 2696만), MDD -35.20%
+  - 전체 2025-01 ~ 2026-04 (16개월): +169.85%
+  - 2026-01 +68.28% 아웃라이어 달(한 달에 +1257만원)
+  - 2026-03 -24.94% 최악 달 (10매도 3승7패, -702만원)
+  - 코스피 레버리지(122630) 주축, 코스피 숏(252670)은 이 기간 신호 0건
+- run_v7_last_year_monthly.py 작성 (v7_best를 subprocess로 실행 + 월별/매도 로그 집계)
+- CSV: v7_last_year_daily_equity.csv, v7_last_year_monthly.csv, v7_last_year_trades.csv
+
+## 추가: BTC로도 검증 완료
+- Binance 공개 API로 BTCUSDT 1분봉 1년치 다운로드 (525,601행, 무료)
+- fetch_btc_binance.py, run_btc_1year_backtest.py, run_btc_1year_timeframes.py 추가
+- 결과: 14개 파라미터 변형 × 4개 타임프레임(1m/5m/15m/1h) = 24개 전부 적자
+- 가장 덜 잃은 것도 -16.65% (1h strict_3.0), PF 0.38
+- Buy & Hold BTC 같은 기간 -12.23% → 전략이 Buy & Hold보다도 나쁨
+- 결론: 자산 문제 아니라 **전략 자체의 R/R 구조 결함** (avg_win < avg_loss 비대칭)
+- 어떤 자산을 붙여도 이 전략 구조는 수익 불가
+
+
+## 주의사항
+- Databento API key db-DGev... 은 .databento_key 파일에 저장됨 (gitignored, chmod 600)
+- 이 키가 또 채팅에 노출되면 rotate 필요
+- Daily 봇(코스피닥)은 건드리지 않음. MNQ만 연구 대상.
