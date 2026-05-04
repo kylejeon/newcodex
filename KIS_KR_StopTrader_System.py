@@ -238,7 +238,7 @@ if IsMarketOpen == True:
             # 스탑 가격에 도달했는지 확인
             if nowPrice >= stop_price:
                 # 스탑 매수 실행
-                data = KisKR.MakeBuyMarketOrder(stock_code, order_volume)
+                data = KisKR.MakeBuyMarketOrder(stock_code, order_volume, True)
                 print(data)
                 handle_order_result(
                     AutoStopData, data, "스탑 매수", stock_name, items_to_remove,
@@ -386,7 +386,7 @@ if IsMarketOpen == True:
                 # 현재가가 트레일링 스탑 가격에 도달했는지 확인
                 if nowPrice >= trailing_stop_price:
                     # 트레일링 스탑 매수 실행
-                    data = KisKR.MakeBuyMarketOrder(stock_code, order_volume)
+                    data = KisKR.MakeBuyMarketOrder(stock_code, order_volume, True)
                     print(data)
                     if handle_order_result(
                         AutoStopData, data, "트레일링 스탑 매수", stock_name, items_to_remove,
