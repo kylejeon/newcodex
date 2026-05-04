@@ -25,11 +25,76 @@ import fcntl
 import line_alert
 import os
 
-from tendo import singleton 
-me = singleton.SingleInstance()
+try:
+    from tendo import singleton
+    me = singleton.SingleInstance()
+except Exception:
+    # 크론에서 flock으로 중복 실행을 막는 경우 tendo가 없어도 계속 진행한다.
+    me = None
+
+
+# 시장가 주문 응답 검증 + 재시도 정책 (2026-05-04)
+# 기존엔 MakeBuy/SellMarketOrder 응답 체크 없이 "실행되었습니다" 메시지+큐 제거 →
+# KIS 거부(예: APBK0952 주문가능금액 초과) 시 사용자가 모르게 매수 실패 후 큐에서 사라짐.
+MAX_ORDER_RETRY = 3
+
+
+def is_order_succeeded(data):
+    """KIS 시장가 주문 응답이 성공인지 판정.
+    성공: dict 이고 'OrderNum2' 가 비어있지 않음 (KIS_API_Helper_KR 의 OrderInfo 형태)
+    실패: data 가 None 이거나 'error': True 이거나 'OrderNum2' 누락/빈값
+    """
+    if not isinstance(data, dict):
+        return False
+    if data.get('error') is True:
+        return False
+    return data.get('OrderNum2') not in [None, '', '0']
+
+
+def handle_order_result(AutoStopData, data, action_label, stock_name,
+                         items_to_remove, extra_lines=None):
+    """주문 API 응답을 평가해서 성공/실패 메시지 송출 + 큐 제어.
+    - 성공: 기존 success 메시지, items_to_remove 에 추가
+    - 실패: RetryCount 증가, MAX_ORDER_RETRY 도달 시 큐 제거, 그 전엔 유지(다음 cron 재시도)
+    """
+    DIST = AutoStopData.get('AccountType', 'REAL')
+    stock_code = AutoStopData.get('stock_code', '')
+    order_id = AutoStopData.get('OrderId', '')
+
+    if is_order_succeeded(data):
+        msg = f"{DIST} {stock_code} {stock_name} {action_label} 주문이 실행되었습니다.\n"
+        msg += f"주문 ID: {order_id}\n"
+        for line in (extra_lines or []):
+            msg += f"{line}\n"
+        msg = msg.rstrip("\n")
+        print(msg)
+        line_alert.SendMessage(msg)
+        items_to_remove.append(AutoStopData)
+        return True
+
+    retry = AutoStopData.get('RetryCount', 0) + 1
+    AutoStopData['RetryCount'] = retry
+    err_msg = ''
+    if isinstance(data, dict):
+        err_msg = data.get('msg1') or data.get('msg_cd') or str(data)
+    else:
+        err_msg = str(data)
+
+    if retry >= MAX_ORDER_RETRY:
+        msg = (f"{DIST} {stock_code} {stock_name} {action_label} 실패 "
+               f"({retry}/{MAX_ORDER_RETRY} 재시도 한계 도달, 큐에서 제거).\n"
+               f"주문 ID: {order_id}\n사유: {err_msg}")
+        items_to_remove.append(AutoStopData)
+    else:
+        msg = (f"{DIST} {stock_code} {stock_name} {action_label} 실패 "
+               f"({retry}/{MAX_ORDER_RETRY} 회, 다음 cron 에 재시도).\n"
+               f"주문 ID: {order_id}\n사유: {err_msg}")
+    print(msg)
+    line_alert.SendMessage(msg)
+    return False
 
 #장이 열린지 여부 판단을 위한 계좌 정보로 현재 자동매매중인 계좌명 아무거나 넣으면 됩니다.
-Common.SetChangeMode("REAL3") #즉 다계좌 매매로 REAL, REAL2, REAL3 여러개를 자동매매 해도 한개만 여기 넣으면 됨!
+Common.SetChangeMode("REAL") #즉 다계좌 매매로 REAL, REAL2, REAL3 여러개를 자동매매 해도 한개만 여기 넣으면 됨!
 
 time.sleep(30.0) #스플릿 트레이더와 중복을 피하기 위해! 30초 대기!
 
@@ -43,7 +108,41 @@ if not os.path.isabs(autobot_data_dir):
     autobot_data_dir = os.path.join(BASE_DIR, autobot_data_dir)
 os.makedirs(autobot_data_dir, exist_ok=True)
 auto_order_file_path = os.path.join(autobot_data_dir, "KIS_KR_StopTrader_AutoOrderList.json")
+sold_today_file_path = os.path.join(autobot_data_dir, "KrStock_REAL_MyKospidaq_Bot_Daily_SoldToday.json")
 time.sleep(random.random()*0.1)
+
+
+def load_sold_today():
+    try:
+        with open(sold_today_file_path, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        data = {'Date': '', 'Tickers': []}
+
+    today_str = str(time.localtime().tm_mon) + "-" + str(time.localtime().tm_mday)
+    if data.get('Date') != today_str:
+        data = {'Date': today_str, 'Tickers': []}
+    return data
+
+
+def save_sold_today(data):
+    with open(sold_today_file_path, 'w') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        json.dump(data, f)
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def mark_sold_today(stock_code):
+    sold_today = load_sold_today()
+    tickers = set(sold_today.get('Tickers', []))
+    tickers.add(stock_code)
+    sold_today['Tickers'] = sorted(tickers)
+    save_sold_today(sold_today)
+
+
+def is_sold_today(stock_code):
+    sold_today = load_sold_today()
+    return stock_code in set(sold_today.get('Tickers', []))
 
 #지정가 주문을 읽고 필요 수량만큼 취소하는 함수
 def CancelLimitOrdersForQuantity(stock_code, target_quantity):
@@ -124,6 +223,13 @@ if IsMarketOpen == True:
 
             stop_price = AutoStopData['StopPrice']
             order_volume = AutoStopData['OrderVolume']
+
+            if is_sold_today(stock_code):
+                msg = DIST + " " + stock_code + " " + stock_name + " 금일 매도 이력이 있어 스탑 매수 주문을 취소합니다."
+                print(msg)
+                line_alert.SendMessage(msg)
+                items_to_remove.append(AutoStopData)
+                continue
             
             # 현재가 조회
             nowPrice = KisKR.GetCurrentPrice(stock_code)
@@ -134,17 +240,14 @@ if IsMarketOpen == True:
                 # 스탑 매수 실행
                 data = KisKR.MakeBuyMarketOrder(stock_code, order_volume)
                 print(data)
-                
-                msg = DIST + " " + stock_code + " " + stock_name + " 스탑 매수 주문이 실행되었습니다.\n"
-                msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                msg += "주문 수량: " + str(order_volume) + "주\n"
-                msg += "스탑 가격: " + str(stop_price) + "원\n"
-                msg += "현재 가격: " + str(nowPrice) + "원"
-                print(msg)
-                line_alert.SendMessage(msg)
-                
-                # 주문 완료 후 리스트에서 제거
-                items_to_remove.append(AutoStopData)
+                handle_order_result(
+                    AutoStopData, data, "스탑 매수", stock_name, items_to_remove,
+                    extra_lines=[
+                        f"주문 수량: {order_volume}주",
+                        f"스탑 가격: {stop_price}원",
+                        f"현재 가격: {nowPrice}원",
+                    ],
+                )
 
         # 스탑 매도 주문 처리
         elif AutoStopData['OrderType'] == "StopSell":
@@ -184,17 +287,15 @@ if IsMarketOpen == True:
                 # 스탑 매도 실행
                 data = KisKR.MakeSellMarketOrder(stock_code, order_volume)
                 print(data)
-                
-                msg = DIST + " " + stock_code + " " + stock_name + " 스탑 매도 주문이 실행되었습니다.\n"
-                msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                msg += "주문 수량: " + str(order_volume) + "주\n"
-                msg += "스탑 가격: " + str(stop_price) + "원\n"
-                msg += "현재 가격: " + str(nowPrice) + "원"
-                print(msg)
-                line_alert.SendMessage(msg)
-                
-                # 주문 완료 후 리스트에서 제거
-                items_to_remove.append(AutoStopData)
+                if handle_order_result(
+                    AutoStopData, data, "스탑 매도", stock_name, items_to_remove,
+                    extra_lines=[
+                        f"주문 수량: {order_volume}주",
+                        f"스탑 가격: {stop_price}원",
+                        f"현재 가격: {nowPrice}원",
+                    ],
+                ):
+                    mark_sold_today(stock_code)
 
         # 익절 매도 주문 처리
         elif AutoStopData['OrderType'] == "ProfitSell":
@@ -234,17 +335,15 @@ if IsMarketOpen == True:
                 # 익절 매도 실행
                 data = KisKR.MakeSellMarketOrder(stock_code, order_volume)
                 print(data)
-                
-                msg = DIST + " " + stock_code + " " + stock_name + " 익절 매도 주문이 실행되었습니다.\n"
-                msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                msg += "주문 수량: " + str(order_volume) + "주\n"
-                msg += "익절 가격: " + str(profit_price) + "원\n"
-                msg += "현재 가격: " + str(nowPrice) + "원"
-                print(msg)
-                line_alert.SendMessage(msg)
-                
-                # 주문 완료 후 리스트에서 제거
-                items_to_remove.append(AutoStopData)
+                if handle_order_result(
+                    AutoStopData, data, "익절 매도", stock_name, items_to_remove,
+                    extra_lines=[
+                        f"주문 수량: {order_volume}주",
+                        f"익절 가격: {profit_price}원",
+                        f"현재 가격: {nowPrice}원",
+                    ],
+                ):
+                    mark_sold_today(stock_code)
 
         # 트레일링 스탑 매수 주문 처리
         elif AutoStopData['OrderType'] == "TrailingStopBuy":
@@ -289,19 +388,17 @@ if IsMarketOpen == True:
                     # 트레일링 스탑 매수 실행
                     data = KisKR.MakeBuyMarketOrder(stock_code, order_volume)
                     print(data)
-                    
-                    msg = DIST + " " + stock_code + " " + stock_name + " 트레일링 스탑 매수 주문이 실행되었습니다.\n"
-                    msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                    msg += "주문 수량: " + str(order_volume) + "주\n"
-                    msg += "트레일링 퍼센트: " + str(trailing_percent) + "%\n"
-                    msg += "최저가: " + str(lowest_price) + "원\n"
-                    msg += "트레일링 스탑 가격: " + str(trailing_stop_price) + "원\n"
-                    msg += "현재 가격: " + str(nowPrice) + "원"
-                    print(msg)
-                    line_alert.SendMessage(msg)
-                    
-                    # 주문 완료 후 리스트에서 제거
-                    items_to_remove.append(AutoStopData)
+                    if handle_order_result(
+                        AutoStopData, data, "트레일링 스탑 매수", stock_name, items_to_remove,
+                        extra_lines=[
+                            f"주문 수량: {order_volume}주",
+                            f"트레일링 퍼센트: {trailing_percent}%",
+                            f"최저가: {lowest_price}원",
+                            f"트레일링 스탑 가격: {trailing_stop_price}원",
+                            f"현재 가격: {nowPrice}원",
+                        ],
+                    ):
+                        mark_sold_today(stock_code)
 
         # 트레일링 스탑 매도 주문 처리
         elif AutoStopData['OrderType'] == "TrailingStopSell":
@@ -369,19 +466,16 @@ if IsMarketOpen == True:
                     # 트레일링 스탑 매도 실행
                     data = KisKR.MakeSellMarketOrder(stock_code, order_volume)
                     print(data)
-                    
-                    msg = DIST + " " + stock_code + " " + stock_name + " 트레일링 스탑 매도 주문이 실행되었습니다.\n"
-                    msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                    msg += "주문 수량: " + str(order_volume) + "주\n"
-                    msg += "트레일링 퍼센트: " + str(trailing_percent) + "%\n"
-                    msg += "최고가: " + str(highest_price) + "원\n"
-                    msg += "트레일링 스탑 가격: " + str(trailing_stop_price) + "원\n"
-                    msg += "현재 가격: " + str(nowPrice) + "원"
-                    print(msg)
-                    line_alert.SendMessage(msg)
-                    
-                    # 주문 완료 후 리스트에서 제거
-                    items_to_remove.append(AutoStopData)
+                    handle_order_result(
+                        AutoStopData, data, "트레일링 스탑 매도", stock_name, items_to_remove,
+                        extra_lines=[
+                            f"주문 수량: {order_volume}주",
+                            f"트레일링 퍼센트: {trailing_percent}%",
+                            f"최고가: {highest_price}원",
+                            f"트레일링 스탑 가격: {trailing_stop_price}원",
+                            f"현재 가격: {nowPrice}원",
+                        ],
+                    )
 
         # 스탑로스 주문 처리 (보유수량 전부 정리)
         elif AutoStopData['OrderType'] == "StopLoss":
@@ -419,21 +513,18 @@ if IsMarketOpen == True:
                 # 스탑로스 실행 (보유수량 전부 매도)
                 data = KisKR.MakeSellMarketOrder(stock_code, FreeAmt)
                 print(data)
-                
-                msg = DIST + " " + stock_code + " " + stock_name + " 스탑로스 주문이 실행되었습니다.\n"
-                msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                msg += "매도 수량: " + str(FreeAmt) + "주\n"
-                msg += "스탑 가격: " + str(stop_price) + "원\n"
-                msg += "현재 가격: " + str(nowPrice) + "원\n"
-                msg += "보유수량 전부 정리 완료"
-                print(msg)
-                line_alert.SendMessage(msg)
-                
-                # 주문 완료 후 리스트에서 제거
-                items_to_remove.append(AutoStopData)
-                
-                # 스탑로스가 실행된 종목을 추적 리스트에 추가
-                stop_loss_executed_tickers.append(stock_code)
+                if handle_order_result(
+                    AutoStopData, data, "스탑로스", stock_name, items_to_remove,
+                    extra_lines=[
+                        f"매도 수량: {FreeAmt}주",
+                        f"스탑 가격: {stop_price}원",
+                        f"현재 가격: {nowPrice}원",
+                        "보유수량 전부 정리 완료",
+                    ],
+                ):
+                    mark_sold_today(stock_code)
+                    # 스탑로스가 실행된 종목을 추적 리스트에 추가
+                    stop_loss_executed_tickers.append(stock_code)
 
         # 트레일링 스탑로스 처리 (보유수량 전부 정리)
         elif AutoStopData['OrderType'] == "TrailingStopLoss":
@@ -495,24 +586,22 @@ if IsMarketOpen == True:
                         continue
                     
                     # 매도 주문 실행 (보유수량 전부)
-                    KisKR.MakeSellMarketOrder(stock_code, FreeAmt)
+                    data = KisKR.MakeSellMarketOrder(stock_code, FreeAmt)
+                    print(data)
                     time.sleep(0.2)
-                    
-                    msg = DIST + " " + stock_code + " " + stock_name + " 트레일링 스탑로스 주문이 실행되었습니다.\n"
-                    msg += "주문 ID: " + AutoStopData['OrderId'] + "\n"
-                    msg += "매도 수량: " + str(FreeAmt) + "주\n"
-                    msg += "실행 가격: " + str(nowPrice) + "원\n"
-                    msg += "최고가: " + str(AutoStopData['HighestPrice']) + "원\n"
-                    msg += "트레일링 스탑 가격: " + str(trailing_stop_price) + "원\n"
-                    msg += "보유수량 전부 정리 완료"
-                    print(msg)
-                    line_alert.SendMessage(msg)
-                    
-                    # 주문 완료 후 리스트에서 제거
-                    items_to_remove.append(AutoStopData)
-                    
-                    # 트레일링 스탑로스가 실행된 종목을 추적 리스트에 추가
-                    stop_loss_executed_tickers.append(stock_code)
+                    if handle_order_result(
+                        AutoStopData, data, "트레일링 스탑로스", stock_name, items_to_remove,
+                        extra_lines=[
+                            f"매도 수량: {FreeAmt}주",
+                            f"실행 가격: {nowPrice}원",
+                            f"최고가: {AutoStopData['HighestPrice']}원",
+                            f"트레일링 스탑 가격: {trailing_stop_price}원",
+                            "보유수량 전부 정리 완료",
+                        ],
+                    ):
+                        mark_sold_today(stock_code)
+                        # 트레일링 스탑로스가 실행된 종목을 추적 리스트에 추가
+                        stop_loss_executed_tickers.append(stock_code)
                     
                 except Exception as e:
                     msg = DIST + " " + stock_code + " " + stock_name + " 트레일링 스탑로스 주문 실행 중 오류 발생: " + str(e)
@@ -550,8 +639,12 @@ if IsMarketOpen == True:
                 data = KisKR.MakeSellMarketOrder(ticker, additional_balance)
                 print(data)
                 time.sleep(0.1)
-                
-                msg = DIST + " " + ticker + " " + KisKR.GetStockName(ticker) + " 스탑로스 후 추가 보유수량 발견 및 매도 완료: " + str(additional_balance) + "주"
+
+                if is_order_succeeded(data):
+                    msg = DIST + " " + ticker + " " + KisKR.GetStockName(ticker) + " 스탑로스 후 추가 보유수량 발견 및 매도 완료: " + str(additional_balance) + "주"
+                else:
+                    err_msg = data.get('msg1') or data.get('msg_cd') or str(data) if isinstance(data, dict) else str(data)
+                    msg = DIST + " " + ticker + " " + KisKR.GetStockName(ticker) + " 스탑로스 후 추가 보유수량 매도 실패: " + str(err_msg)
                 print(msg)
                 line_alert.SendMessage(msg)
         except Exception as e:

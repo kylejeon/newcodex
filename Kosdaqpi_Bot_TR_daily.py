@@ -30,7 +30,7 @@ import telegram_alert
 Common.SetChangeMode("REAL")
 
 InvestStockList = ["122630", "252670", "233740", "251340"]
-InvestRate = 0.85
+InvestRate = 0.85  # 0.95 시 KIS 시장가 매수 reserve 부족(APBK0952 주문가능금액 초과) 발생 - 2026-05-04
 BOT_NAME = Common.GetNowDist() + "_MyKospidaq_Bot_Daily"
 PortfolioName = "게만아 코스피닥 매매 전략!"
 
