@@ -53,6 +53,30 @@ with open('./myStockInfo.yaml', encoding='UTF-8') as f:
 ############################################################################################################################################################
 NOW_DIST = ""
 
+
+def _resolve_dist_key(dist, suffix):
+    global stock_info
+
+    dist = (dist or "REAL").strip()
+
+    # 명시적 가상계좌
+    if dist.startswith("VIRTUAL"):
+        key = f"VIRTUAL_{suffix}"
+        if key in stock_info:
+            return key
+        raise KeyError(key)
+
+    # REAL, REAL2, REAL3 등은 개별 키가 있으면 우선 사용, 없으면 REAL 공용 키로 폴백
+    candidate = f"{dist}_{suffix}"
+    if candidate in stock_info:
+        return candidate
+
+    fallback = f"REAL_{suffix}"
+    if fallback in stock_info:
+        return fallback
+
+    raise KeyError(candidate)
+
 #계좌 전환 함수! REAL 실계좌 VIRTUAL 모의계좌
 def SetChangeMode(dist = "REAL"):
     global NOW_DIST 
@@ -62,7 +86,7 @@ def SetChangeMode(dist = "REAL"):
 #현재 선택된 계좌정보를 리턴!
 def GetNowDist():
     global NOW_DIST 
-    return NOW_DIST
+    return NOW_DIST if NOW_DIST not in [None, ""] else "REAL"
 
 ############################################################################################################################################################
 
@@ -72,15 +96,7 @@ def GetNowDist():
 def GetAppKey(dist = "REAL"):
     
     global stock_info
-    
-    key = ""
-    
-    if dist == "REAL":
-        key = "REAL_APP_KEY"
-    elif dist == "VIRTUAL":
-        key = "VIRTUAL_APP_KEY"
-        
-    return stock_info[key]
+    return stock_info[_resolve_dist_key(dist, "APP_KEY")]
 '''
 #위의 함수는 다계좌 매매시 수정해야 되지만 아래 함수를 쓰면 수정할 필요가 없게 개선되었습니다!
 #위 함수를 주석처리하고 아래 함수를 사용해도 됩니다 :)
@@ -97,15 +113,7 @@ def GetAppKey(dist = "REAL"):
 def GetAppSecret(dist = "REAL"):
     
     global stock_info
-    
-    key = ""
-    
-    if dist == "REAL":
-        key = "REAL_APP_SECRET"
-    elif dist == "VIRTUAL":
-        key = "VIRTUAL_APP_SECRET"
-        
-    return stock_info[key]
+    return stock_info[_resolve_dist_key(dist, "APP_SECRET")]
 '''
 #위의 함수는 다계좌 매매시 수정해야 되지만 아래 함수를 쓰면 수정할 필요가 없게 개선되었습니다!
 #위 함수를 주석처리하고 아래 함수를 사용해도 됩니다 :)
@@ -121,15 +129,7 @@ def GetAppSecret(dist = "REAL"):
 #계좌 정보를 리턴!
 def GetAccountNo(dist = "REAL"):
     global stock_info
-    
-    key = ""
-    
-    if dist == "REAL":
-        key = "REAL_CANO"
-    elif dist == "VIRTUAL":
-        key = "VIRTUAL_CANO"
-        
-    return stock_info[key]
+    return stock_info[_resolve_dist_key(dist, "CANO")]
 '''
 #위의 함수는 다계좌 매매시 수정해야 되지만 아래 함수를 쓰면 수정할 필요가 없게 개선되었습니다!
 #위 함수를 주석처리하고 아래 함수를 사용해도 됩니다 :)
@@ -143,15 +143,7 @@ def GetAccountNo(dist = "REAL"):
 #계좌 정보를 리턴!
 def GetPrdtNo(dist = "REAL"):
     global stock_info
-    
-    key = ""
-    
-    if dist == "REAL":
-        key = "REAL_ACNT_PRDT_CD"
-    elif dist == "VIRTUAL":
-        key = "VIRTUAL_ACNT_PRDT_CD"
-        
-    return stock_info[key]
+    return stock_info[_resolve_dist_key(dist, "ACNT_PRDT_CD")]
 '''
 #위의 함수는 다계좌 매매시 수정해야 되지만 아래 함수를 쓰면 수정할 필요가 없게 개선되었습니다!
 #위 함수를 주석처리하고 아래 함수를 사용해도 됩니다 :)
@@ -167,15 +159,7 @@ def GetPrdtNo(dist = "REAL"):
 #토큰 저장할 경로
 def GetTokenPath(dist = "REAL"):
     global stock_info
-    
-    key = ""
-    
-    if dist == "REAL":
-        key = "REAL_TOKEN_PATH"
-    elif dist == "VIRTUAL":
-        key = "VIRTUAL_TOKEN_PATH"
-        
-    return stock_info[key]
+    return stock_info[_resolve_dist_key(dist, "TOKEN_PATH")]
 '''
 #위의 함수는 다계좌 매매시 수정해야 되지만 아래 함수를 쓰면 수정할 필요가 없게 개선되었습니다!
 #위 함수를 주석처리하고 아래 함수를 사용해도 됩니다 :)
@@ -191,16 +175,7 @@ def GetTokenPath(dist = "REAL"):
 #URL주소를 리턴!
 def GetUrlBase(dist = "REAL"):
     global stock_info
-    
-    key = ""
-    
-    if dist == "VIRTUAL":
-        key = "VIRTUAL_URL"
-    else:
-        key = "REAL_URL"
-        
-
-    return stock_info[key]
+    return stock_info[_resolve_dist_key(dist, "URL")]
 
 
        
@@ -1313,4 +1288,3 @@ def GetStoch(ohlcv,period,st):
     dic_stoch['slow_d'] = slow_d.iloc[st]
 
     return dic_stoch
-

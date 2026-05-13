@@ -1021,7 +1021,7 @@ def GetCurrentStatus(stock_code):
 ############################################################################################################################################################
 #시장가 주문하기!
 def MakeBuyMarketOrder(stockcode, amt, adjustAmt = False):
-    
+
     #매수가능 수량으로 보정할지 여부
     if adjustAmt == True:
         try:
@@ -1029,7 +1029,14 @@ def MakeBuyMarketOrder(stockcode, amt, adjustAmt = False):
             amt = AdjustPossibleAmt(stockcode, amt, "MARKET")
 
         except Exception as e:
-            print("Exception")
+            # AdjustPossibleAmt 실패 시 silent 로 원래 amt 로 진행하면
+            # KIS 가 APBK0952 등으로 거부할 수 있음. 명시적 실패 반환.
+            print(f"[ERROR] AdjustPossibleAmt({stockcode}, MARKET) failed: {type(e).__name__}: {e}")
+            return {
+                "error": True,
+                "msg_cd": "ADJ_AMT_FAIL",
+                "msg1": f"AdjustPossibleAmt 실패 - 수량 보정 불가: {e}",
+            }
 
     #퇴직연금(29) 반영
     if int(Common.GetPrdtNo(Common.GetNowDist())) == 29:
@@ -1161,7 +1168,7 @@ def MakeSellMarketOrder(stockcode, amt):
 
 #지정가 주문하기!
 def MakeBuyLimitOrder(stockcode, amt, price, adjustAmt = False, ErrLog = "NO"):
-    
+
 
     #매수가능 수량으로 보정할지 여부
     if adjustAmt == True:
@@ -1170,7 +1177,14 @@ def MakeBuyLimitOrder(stockcode, amt, price, adjustAmt = False, ErrLog = "NO"):
             amt = AdjustPossibleAmt(stockcode, amt, "LIMIT")
 
         except Exception as e:
-            print("Exception")
+            # AdjustPossibleAmt 실패 시 silent 로 원래 amt 로 진행하면
+            # KIS 가 APBK0952 등으로 거부할 수 있음. 명시적 실패 반환.
+            print(f"[ERROR] AdjustPossibleAmt({stockcode}, LIMIT) failed: {type(e).__name__}: {e}")
+            return {
+                "error": True,
+                "msg_cd": "ADJ_AMT_FAIL",
+                "msg1": f"AdjustPossibleAmt 실패 - 수량 보정 불가: {e}",
+            }
 
 
     #퇴직연금(29) 반영

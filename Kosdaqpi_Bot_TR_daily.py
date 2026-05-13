@@ -478,6 +478,8 @@ def main():
                         remain_invest_money -= buy_amt * buy_price * 1.0015
                     else:
                         msg = data['StockName'] + " 일봉형 시가매수 주문 실패."
+                        if isinstance(order_data, dict) and order_data.get('error'):
+                            msg += f" (KIS: {order_data.get('msg_cd','?')} {order_data.get('msg1','')})"
                         print(msg)
                         telegram_alert.SendMessage(msg)
             else:

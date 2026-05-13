@@ -99,3 +99,56 @@
 - Databento API key db-DGev... 은 .databento_key 파일에 저장됨 (gitignored, chmod 600)
 - 이 키가 또 채팅에 노출되면 rotate 필요
 - Daily 봇(코스피닥)은 건드리지 않음. MNQ만 연구 대상.
+
+
+# 2026-05-13 세션 (추가 작업)
+
+## 뭘 했나
+1. 백테스트 결과 차이 진단
+   - 사용자 이전 백테스트(2026-03-16 실행): 11208%, MDD -23.6%, CAGR 74.42%
+   - 오늘 실행(2026-05-13): 9681%, MDD -32.71%, CAGR 71.63%
+   - 원인: KIS GetOhlcv(2200) 가 호출 시점 기준 rolling 2200영업일 → 윈도가 굴렀음
+   - 종료일 컷오프(2026-03-16) 적용 후 거의 일치 (수익률 -0.6%, MDD +0.48%p)
+   - run_v7_end_2026_03_16.py 작성 (재현 검증용)
+
+2. 룩어헤드 검증 — 결론: 없음
+   - 모든 지표 .shift(1) 처리 (ma_*_before, prev*)
+   - 매수/매도 stop-order 시뮬레이션 정상 (today's high/low/close 사용은 실거래 stop 동작 흉내)
+
+3. 트레일링스탑 변형 폐기 재확인
+   - Kosdaqpi_Test_upgrade_v7_best_trailing.py 존재하지만 실행 결과 baseline 보다 나쁨
+   - 메모리 project_trailing_stop_rejected.md 신규 등록
+
+4. 실매매 vs 백테스트 비교 도구 일반화 (옵션 B+C)
+   - 기존 compare_march2026_real_vs_v7_backtest.py 는 3월 하드코딩 + Step 3 122630 하드스탑 미반영 (stale)
+   - 신규 compare_real_vs_backtest.py 작성:
+     * v7_best.py subprocess 패치 실행으로 trades CSV dump (parallel impl 회피)
+     * KIS inquire-daily-ccld API 로 실거래 fetch (3개월 chunk + 페이지네이션)
+     * FIFO BUY/SELL pairing 으로 ret% 계산
+     * CLI: --start, --end (기본: 직전 달), --refresh
+     * autobot_data/v7_best_trades_cache.csv 캐시
+   - 마커 매칭 검증 (SELL × 2, BUY × 2, head anchor × 1), 패치 후 syntax 정상
+
+## 어디까지 됐나
+- compare_real_vs_backtest.py 작성 완료
+- Mac 에서 syntax + dry-run 패치 검증 완료
+- 실제 v7_best 시뮬레이션 실행 + KIS API 호출은 WSL 서버에서 미검증 (Mac 토큰 없음)
+- claude 브랜치, 미커밋 상태
+
+## 다음 뭐 해야 하나
+- 사용자가 WSL 서버에서 `git pull` 후 `python3 compare_real_vs_backtest.py --refresh` 1회 실행
+- 캐시 생성 정상 확인 → 이후 매월 1회 직전 달 자동 비교 가능
+- cron 등록 (선택): `0 6 1 * * cd /home/kylejeon/codex && python3 compare_real_vs_backtest.py >> autobot_data/compare_monthly.log 2>&1`
+- run_v7_end_2026_03_16.py 는 일회성 검증 도구 (보존 가치 낮음)
+
+
+## 2026-05-13 추가: 4월+5월 비교 결과
+- compare_real_vs_backtest.py 정상 동작, KIS API fetch + 매칭 정상
+- 4월 알파 손실 -13.21%p (4/24 122630) 원인 = InvestRate=0.85 자본 잠금 (project_invest_rate_085_capacity_lock.md 메모리)
+- 5/4 233740 자동 매수 실패 → 사용자가 수동으로 17,170×350주 매수
+- 5/12 청산 -2.96% (백테스트 -12.78% 대비 +9.82%p) — 알파는 봇이 아닌 사람의 수동 개입에서 발생
+- 5/13 122630 +36.68% (백테스트 +36.13%, 거의 완벽 매칭) — 정상 보유→대기→익절
+- silent failure fix (commit 235d81e, 0dd44e1) 의 실효성은 아직 실거래 데이터로 미검증
+  - WSL 서버에 pull 됐는지 확인 필요
+  - 다음 자동 매수 신호 발생 시 silent failure 재발 안 하는지 모니터링 필수
+
