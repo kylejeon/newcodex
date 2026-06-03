@@ -958,3 +958,43 @@ python3 V_FINAL_exit_monitor.py
 - KOSDAQ_rocket_v8_improve.py (경로 fix)
 - KOSDAQ_rocket_v17_market_filter.py (경로 fix)
 - .gitignore (보안/캐시 제외)
+
+---
+
+# 2026-06-03 최종 (V32C 검증 + config 변경)
+
+## V32C — vol 1.9 ma 1.40 walk-forward direct test
+
+| Fold | 기간 | vol 1.9 ma 1.40 | V_FINAL old (2.0, 1.45) |
+|---|---|---|---|
+| 1 | 23~24/6 | +81.5% | +207.4% |
+| 2 | 2024 | +50.7% | +51.3% |
+| 3 (최신) | 25~26/5 | +99.7% | +66.7% |
+| 평균 | — | +77.3% | +108.5% |
+
+핵심:
+- Fold 3 (최신): vol 1.9 ma 1.40 가 +33pp 우위
+- 변동성: vol 1.9 폭 50pp, V_FINAL 폭 156pp (3배 안정)
+- MDD: vol 1.9 모든 fold 에서 더 낮음
+- V_FINAL 평균 우위는 Fold 1 mega-rocket 단일 의존
+
+## Config 변경 (2026-06-03)
+- V_FINAL_signal_bot.py V_FINAL 클래스
+  - ma200_max_dist: 1.45 → 1.40
+  - vol_mult: 2.0 → 1.9
+
+## 5월 신호 재현 (new config)
+- 2026-05-08 (금) → 5/11: 102940 코오롱생명과학 (이전과 동일)
+- ma200=1.39, vol=2.63 → 두 config 모두 통과
+- 단일 신호 시 결과 동일. 누적 차이는 다른 시기 발생.
+
+## 기대치 업데이트 (운영)
+- CAGR: +70~85% (Walk-forward Fold 3 +99.7% 기준 + bias 보정)
+- MDD: -25~-30%
+- Win rate: 40~45%
+- Trade 빈도: 14~20/년
+
+## 다음 뭐 해야 하나
+1. Mac: V_FINAL config 변경 commit + push
+2. 미니PC: pull → 새 config 적용
+3. 2026-06-05 (금) 17:00 첫 자동 실행 점검

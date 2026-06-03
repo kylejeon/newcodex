@@ -108,22 +108,40 @@ python3 bulk_fetch_investor.py
 4. **매일 15:30+ exit check, 다음 거래일 OPEN 매도**
 5. **첫 1-2달 paper trade** — 실제 신호 받아서 매매 ROI 비교
 
-## V_FINAL 기대값 (정직 estimate, V30-V32 검증 후 업데이트)
+## V_FINAL 기대값 (정직 estimate, V32C 검증 후 vol 1.9 ma 1.40 채택)
 
-| 지표 | Backtest (full cache 1184) | Walk-forward OOS (Fold 3) | 운영 기대치 (bias 보정 후) |
+### 현재 운영 config (2026-06-03 변경)
+- `vol_mult = 1.9` (이전 2.0)
+- `ma200_max_dist = 1.40` (이전 1.45)
+- `lowvol_th = 0.07`, `max_pos = 6`, `par = 0.12` (동일)
+
+### Walk-forward Test 결과 (V32C 직접 시뮬레이션)
+
+| Fold | 기간 | vol 1.9 ma 1.40 | V_FINAL old (2.0, 1.45) |
 |---|---|---|---|
-| CAGR | +146.8% | +66.7% | **+45 ~ +55%** |
-| MDD | -33.3% | -28.6% | -25 ~ -35% |
-| Win rate | 42% | — | 40~45% |
-| Trade 빈도 | 평균 14/년 | — | 5~16/년 |
-| 보유 기간 | 평균 49일 | — | 7~150일 |
+| 1 | 23~24/6 | +81.5% / -19% / C/M 4.19 | +207.4% / -33% / C/M 6.22 |
+| 2 | 2024 | +50.7% / -19% / C/M 2.64 | +51.3% / -20% / C/M 2.57 |
+| **3 (최신)** | **25~26/5** | **+99.7% / -28% / C/M 3.56** | +66.7% / -29% / C/M 2.33 |
+| 평균 | — | +77.3% | +108.5% |
+
+→ Fold 3 (최신, 가장 운영에 가까움) 에서 **vol 1.9 ma 1.40 가 +33pp 우위**
+→ 변동성: 50pp 폭 (V_FINAL 156pp 의 1/3) — **3배 안정**
+
+### 운영 기대치
+
+| 지표 | Full backtest | Walk-forward Fold 3 | 운영 기대 (bias 보정) |
+|---|---|---|---|
+| CAGR | +118.6% | +99.7% | **+70 ~ +85%** |
+| MDD | -28.3% | -28.0% | -25 ~ -30% |
+| Win rate | 44% | 47% | 40~45% |
+| Trade 빈도 | 73건/5년 | 32건/1.5년 | 14~20/년 |
 
 ### 검증 요약 (V30~V32)
 - ✅ Walk-forward robust 통과 (avg train→test drop -15pp)
 - ⚠️ Survivorship bias 존재 (universe = 현재 상장 종목만, ~500 상폐 종목 누락)
-- ❌ vol 1.9 우위 미미 (2021년 효과만)
-- ❌ Partial profit taking 모두 baseline 보다 열위
-- → V_FINAL config (vol 2.0, ma200_dist 1.45) **그대로 운영 시작**
+- ❌ Partial profit taking 모두 baseline 보다 열위 (V32B)
+- ✅ **vol 1.9 ma 1.40 채택** (V32C): Fold 3 +33pp 우위, 변동성 1/3, MDD 개선
+- ❌ KOSPI 통합 (V28-V29) — alpha 없음 거부
 
 ## 한계 + 위험 (정직)
 

@@ -41,10 +41,14 @@ SIGNAL_LOG_DIR = ROOT / 'v_final_signals'
 SIGNAL_LOG_DIR.mkdir(exist_ok=True)
 
 
-# V_FINAL config (불변)
+# V_FINAL config (V32C walk-forward 검증 후 vol 1.9 ma 1.40 로 변경, 2026-06-03)
+# - Fold 3 OOS (2025-26): +99.7% vs old V_FINAL +66.7% (+33pp 우위)
+# - 변동성: 50pp 폭 (V_FINAL 156pp 의 1/3)
+# - MDD: -28% vs -33% (개선)
+# - Mega-rocket 의존도 낮음 → survivorship bias 영향 작음
 class V_FINAL:
-    ma200_max_dist = 1.45
-    vol_mult       = 2.0
+    ma200_max_dist = 1.40
+    vol_mult       = 1.9
     lowvol_th      = 0.07
     max_pos        = 6
     par            = 0.12
