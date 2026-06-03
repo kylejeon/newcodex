@@ -22,9 +22,10 @@ from typing import NamedTuple
 
 import pandas as pd
 
-CACHE_DIR = Path('/Users/yonghyuk/newcodex/kosdaq_cache')
-INVESTOR_DIR = Path('/Users/yonghyuk/newcodex/kosdaq_investor_cache')
-OUT_DIR = Path('/Users/yonghyuk/newcodex/mnq_backtest_output')
+_ROOT = Path(__file__).resolve().parent
+CACHE_DIR = _ROOT / 'kosdaq_cache'
+INVESTOR_DIR = _ROOT / 'kosdaq_investor_cache'
+OUT_DIR = _ROOT / 'mnq_backtest_output'
 UNIVERSE_CSV = CACHE_DIR / 'universe.csv'
 
 ALL_START = pd.Timestamp('2021-01-04')

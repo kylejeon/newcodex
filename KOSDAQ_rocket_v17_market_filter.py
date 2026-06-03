@@ -31,7 +31,7 @@ import KOSDAQ_rocket_v9_ensemble as v9
 
 B5_TIGHT = BCfg('B5_tight', 2.0, 20, True, 0.02)
 
-KOSDAQ_CACHE = Path('/Users/yonghyuk/newcodex/kosdaq_index_cache.csv')
+KOSDAQ_CACHE = Path(__file__).resolve().parent / 'kosdaq_index_cache.csv'
 
 
 def fetch_kosdaq_index():
