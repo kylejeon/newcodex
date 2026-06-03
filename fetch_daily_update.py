@@ -38,6 +38,8 @@ ROOT = Path(__file__).resolve().parent
 CACHE_DIR = ROOT / 'kosdaq_cache'
 INVESTOR_DIR = ROOT / 'kosdaq_investor_cache'
 UNIVERSE_CSV = CACHE_DIR / 'universe.csv'
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+INVESTOR_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def fetch_ohlcv_incremental(ticker, today_yyyymmdd):

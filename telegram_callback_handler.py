@@ -143,6 +143,145 @@ def handle_sell_callback(scan_date, ticker):
     )
 
 
+def lookup_ticker_name(ticker):
+    """Look up ticker name from universe.csv."""
+    try:
+        import pandas as pd
+        udf = pd.read_csv(ROOT / 'kosdaq_cache' / 'universe.csv', dtype={'ticker': str})
+        row = udf[udf['ticker'] == ticker]
+        if len(row) > 0:
+            return str(row.iloc[0]['name'])
+    except Exception:
+        pass
+    return ticker  # fallback
+
+
+def handle_buy_command(text):
+    """/buy <ticker> <price> <qty> [YYYY-MM-DD]"""
+    parts = text.strip().split()
+    if len(parts) < 4:
+        telegram_alert.SendMessage(
+            "⚠️ 형식 오류\n"
+            "사용법: /buy <티커> <체결가> <수량> [YYYY-MM-DD]\n"
+            "예: /buy 102940 65600 100\n"
+            "예: /buy 102940 65600 100 2026-05-11"
+        )
+        return
+    ticker = parts[1].strip().zfill(6)
+    try:
+        entry_px = float(parts[2].replace(',', ''))
+        qty = int(parts[3])
+    except ValueError:
+        telegram_alert.SendMessage(f"⚠️ 체결가/수량 파싱 실패: {parts[2]} {parts[3]}")
+        return
+    if entry_px <= 0 or qty <= 0:
+        telegram_alert.SendMessage("⚠️ 체결가/수량은 양수")
+        return
+
+    # Entry date (optional 5th arg)
+    if len(parts) >= 5:
+        try:
+            entry_date = datetime.strptime(parts[4], '%Y-%m-%d').strftime('%Y-%m-%d')
+        except ValueError:
+            telegram_alert.SendMessage(f"⚠️ 날짜 형식: YYYY-MM-DD (받음: {parts[4]})")
+            return
+    else:
+        entry_date = datetime.now().strftime('%Y-%m-%d')
+
+    # Lookup name
+    name = lookup_ticker_name(ticker)
+
+    # Check duplicate
+    holdings = load_holdings()
+    if any(h['ticker'] == ticker for h in holdings):
+        telegram_alert.SendMessage(f"⚠️ {ticker} {name} 이미 보유 중")
+        return
+
+    new_holding = {
+        'ticker': ticker,
+        'name': name,
+        'entry_date': entry_date,
+        'entry_px': entry_px,
+        'qty': qty,
+        'max_close': entry_px,
+        'max_close_date': entry_date,
+    }
+    holdings.append(new_holding)
+    save_holdings(holdings)
+
+    telegram_alert.SendMessage(
+        f"✅ 매수 등록 완료\n"
+        f"{ticker} {name}\n"
+        f"체결가: {entry_px:,.0f}원\n"
+        f"수량: {qty:,}\n"
+        f"entry_date: {entry_date}\n"
+        f"\n현재 보유: {len(holdings)}건"
+    )
+
+
+def handle_sell_command(text):
+    """/sell <ticker> <price>"""
+    parts = text.strip().split()
+    if len(parts) < 3:
+        telegram_alert.SendMessage(
+            "⚠️ 형식 오류\n"
+            "사용법: /sell <티커> <체결가>\n"
+            "예: /sell 102940 55100"
+        )
+        return
+    ticker = parts[1].strip().zfill(6)
+    try:
+        exit_px = float(parts[2].replace(',', ''))
+    except ValueError:
+        telegram_alert.SendMessage(f"⚠️ 체결가 파싱 실패: {parts[2]}")
+        return
+    if exit_px <= 0:
+        telegram_alert.SendMessage("⚠️ 체결가는 양수")
+        return
+
+    holdings = load_holdings()
+    h = next((h for h in holdings if h['ticker'] == ticker), None)
+    if h is None:
+        telegram_alert.SendMessage(f"⚠️ {ticker} 보유 중 아님")
+        return
+
+    entry_px = h['entry_px']
+    qty = h.get('qty', 0)
+    name = h.get('name', ticker)
+    pnl_pct = (exit_px / entry_px - 1) * 100
+    pnl_amt = (exit_px - entry_px) * qty
+
+    # Log closed
+    closed_log = ROOT / 'v_final_closed_trades.json'
+    closed = []
+    if closed_log.exists():
+        try:
+            with open(closed_log) as f:
+                closed = json.load(f)
+        except Exception:
+            closed = []
+    closed.append({
+        'ticker': ticker, 'name': name,
+        'entry_date': h['entry_date'], 'entry_px': entry_px,
+        'exit_date': datetime.now().strftime('%Y-%m-%d'),
+        'exit_px': exit_px, 'qty': qty,
+        'pnl_pct': pnl_pct, 'pnl_amt': pnl_amt,
+    })
+    with open(closed_log, 'w') as f:
+        json.dump(closed, f, indent=2, ensure_ascii=False)
+
+    holdings = [hh for hh in holdings if hh['ticker'] != ticker]
+    save_holdings(holdings)
+
+    telegram_alert.SendMessage(
+        f"✅ 매도 등록 완료\n"
+        f"{ticker} {name}\n"
+        f"체결가: {exit_px:,.0f}원 (entry {entry_px:,.0f})\n"
+        f"P&L: {pnl_pct:+.1f}% ({pnl_amt:+,.0f}원)\n"
+        f"\n현재 보유: {len(holdings)}건"
+    )
+
+
 def handle_text_input(text):
     """User sent text. Check waiting state and process."""
     waiting = load_waiting()
@@ -328,7 +467,28 @@ def main():
                 save_waiting(None)
                 telegram_alert.SendMessage("❎ 입력 대기 취소")
                 continue
-            # Process text input (price/qty)
+            # /buy <ticker> <price> <qty> [YYYY-MM-DD]
+            if text.startswith('/buy'):
+                handle_buy_command(text)
+                continue
+            # /sell <ticker> <price>
+            if text.startswith('/sell'):
+                handle_sell_command(text)
+                continue
+            # /help
+            if text.strip() == '/help':
+                telegram_alert.SendMessage(
+                    "📖 V_FINAL 봇 명령\n"
+                    "/holdings — 현재 보유 종목\n"
+                    "/buy <티커> <체결가> <수량> [YYYY-MM-DD]\n"
+                    "  예: /buy 102940 65600 100\n"
+                    "  예: /buy 102940 65600 100 2026-05-11\n"
+                    "/sell <티커> <체결가>\n"
+                    "  예: /sell 102940 55100\n"
+                    "/cancel — 입력 대기 취소"
+                )
+                continue
+            # Process text input (price/qty from inline keyboard flow)
             handle_text_input(text)
 
     save_state(state)
