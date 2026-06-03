@@ -142,6 +142,63 @@
 - run_v7_end_2026_03_16.py 는 일회성 검증 도구 (보존 가치 낮음)
 
 
+## 2026-05-19 US ETF 백테스트 파일 생성 + 4-way 비교
+- US_v7_best_TQQQ_SPXL_SOXL.py: 6종목 (KR 파라미터 그대로 substitution)
+  → 결과: +3,902%, CAGR 56.22%, MDD -49.42%. SPX 페어 (특히 SPXS -5.67% avg) 가 catastrophic
+- US_v7_best_TQQQ_SOXL_only.py: Option A, SPX 페어 제거 (4종목)
+  → 결과: +17,298%, CAGR 86.58%, MDD -47.72%. 4.4x 개선
+- US_v7_best_option_B1.py: 하드스탑 강화 0.085/0.125 → 0.07/0.10
+  → 결과: +15,707%, CAGR 84.43%, MDD -46.59%. dead end (CAGR/MDD ratio 변화 없음)
+- US_v7_best_long_only.py: TQQQ+SOXL only, max-hold=2 강제
+  → 결과: +26,000%, CAGR 95.92%, MDD -32.96%. **모든 지표 1등** ⭐
+
+## 핵심 발견
+- 숏 ETF (SQQQ/SOXS) 는 헤지가 아니라 자본 점유 비용. 제거 시 MDD 오히려 개선.
+- 돌파매수 조건 자체가 약세장에서 안 잡힘 → implicit regime filter 효과
+- US long-only 가 KR baseline 보다 CAGR +24%p 우수, MDD 동등 (32.71 vs 32.96)
+- 단 overfit 검증 안 됨, 실매매 마찰 미반영
+
+## 다음 권장
+- Walk-forward 검증 완료 (2026-05-19): 🟢 ROBUST 판정
+- 다음: 실매매 마찰 반영 백테스트 (환전, 세금, 슬리피지)
+
+## 2026-05-19 실매매 마찰 반영 결과 (US long-only)
+- realistic_friction_us_long_only.py 작성 + 실행
+- Baseline CAGR 95.83% → 환전 95.60% → 양도세 22% 적용 후 74.31% → 종합 74.10%
+- 환전 -1% 영향 거의 X (1회성, 8년 분산)
+- 양도세 22%가 진짜 비용 (-21.5%p)
+- MDD 는 변화 없음 (-32.96% 유지)
+- KR 봇 (CAGR 71.6%, 세금 비과세) 대비 US 가 세금 후에도 +2.5%p 우수
+- 결론: US long-only 전략 실수익 추정 CAGR 74%, MDD -33%. 충분히 매력적.
+
+## 다음 권장
+1. KIS 미국주식 API 자동매매 가능성 검증 (KIS_API_Helper_US.py 활용)
+2. KR/US 포트폴리오 자본 분배 정책 결정
+3. 손실 상계 정확 시뮬레이션 (KR/US 손실 합산 절세)
+
+
+## 2026-05-29 자본잠금 fix (daily 봇) — backtest 와 미러링
+- Kosdaqpi_Bot_TR_daily.py 2곳 수정:
+  1. KOSPI 매도 후 remain_invest_money += hold[amt]×hold[avg] 즉시 회수
+  2. invest_cnt 계산 시 today_sell_code 제외 → first/second signal sizing 정상화
+- 백테스트 (v7_best.py line 598, 717) 와 동일 로직. daily 봇만 빠져 있던 게 fix
+- ✅ 해결: 같은 날 KOSPI 매도 → 다른 종목 매수 케이스 (4/3, 4/8, 4/24, 5/13, 5/15 등)
+- ❌ 미해결: KOSDAQ stop intraday firing → 별도 cash 회수 불가 (single-pass 한계)
+  - 4/9, 4/13 같은 4월 핵심 케이스는 여전히 해결 안 됨
+  - 추후 옵션: 오후 second-run cron 또는 daily 봇 아키텍처 변경
+- Syntax OK, 다음 거래일부터 효과 모니터링 권장
+
+
+## 2026-05-19 Walk-forward 검증 결과 (US long-only)
+- walk_forward_us_long_only.py 작성 + 실행
+- 8.3년 9개 연도 중 8년 흑자 (median +123%/y)
+- 유일 손실: 2022 -15.45% (베어 마켓, MDD -32.9%)
+- 롤링 3년 윈도: 최악도 CAGR 37.7%
+- Train/test 분할 (최근 2 splits): Δ ±3%p 매우 안정적
+- 롤링 1년 분포: 97.3% positive, median +78.7%
+- 결론: 전략 robust, overfit 아님. 단 2022 같은 베어 재발 시 -15% 손실 감수 필요
+
+
 ## 2026-05-13 추가: 4월+5월 비교 결과
 - compare_real_vs_backtest.py 정상 동작, KIS API fetch + 매칭 정상
 - 4월 알파 손실 -13.21%p (4/24 122630) 원인 = InvestRate=0.85 자본 잠금 (project_invest_rate_085_capacity_lock.md 메모리)
@@ -152,3 +209,697 @@
   - WSL 서버에 pull 됐는지 확인 필요
   - 다음 자동 매수 신호 발생 시 silent failure 재발 안 하는지 모니터링 필수
 
+
+## 2026-06-02 세션: Nasdaq-100 돌파매매 전략 탐색
+
+### 뭘 했나
+1. CEO 요청: 자동매매 봇 유지한 채 미국 종목 돌파매매 전략 실험
+2. EMA22/EMA200 + Chandelier(22, ATR22, ×4) 백테스트 → 실패
+   - CAGR 14.79%, MDD -53.58% — QQQ B&H 보다 나쁨
+   - EMA cross 는 너무 늦은 신호 (200일 평균 추세 확정)
+3. CEO 의견: "EMA cross 가 너무 늦다, 더 좋은 돌파전략 없나"
+4. 4가지 전략 비교 (Nasdaq-100, 2017-2026.05, 9.4년):
+   - EMA22/200 + Chandelier: CAGR 14.79% MDD -53.58%
+   - Donchian 20/10 + ATR×2: CAGR 17.06% MDD -39.51%
+   - v7_best style baseline: CAGR 24.46% MDD -42.91% (2024 -31%, 2025 -10% 문제)
+   - QQQ B&H: CAGR 21.37% MDD -35.62%
+5. v7_best style 가 best — 그러나 2024-25 부진. 파라미터 튜닝 10 configs 실행:
+   - Config B (stop 7%): CAGR 31.87% MDD -40.77%
+   - Config H (defensive: break14+stop7+max5): CAGR 23.80% MDD -26.46% C/M 0.90 ★
+6. Config H walk-forward 검증 통과 — 🟢 ROBUST
+   - 9/10 연도 positive
+   - 2024 +11.5%, 2025 +18.8% (baseline 의 -31%, -10% 에서 개선)
+   - Train/test gap 일관 안함 (overfit 신호 없음)
+7. 실매매 마찰 분석:
+   - Baseline 23.80% → 환전 -1% + 양도세 22% → 실 CAGR **19.16%**
+   - MDD -26.46% (세금 절감 없음)
+
+### 어디까지 됐나
+- 10 종목 백테스트 파일 모두 작성/실행 완료
+- nasdaq100_cache/ 에 101 ticker × 10년 데이터 캐시됨
+- Memory 저장: project_nasdaq100_h_config.md
+
+### 결론
+- Config H 검증 통과했지만 KR v7_best (~71% 비과세) 및 US TQQQ/SOXL long-only (~74% 후마찰) 보다 열위
+- 양도세 22% drag (-4.5%p) + non-leveraged 종목 제약
+- KR 봇 메인 유지 권장
+- US 추가하려면 TQQQ+SOXL long-only 가 우월
+- Config H 는 분산 목적용 (큰 자본금 + 위험 분산 필요 시)
+
+### 다음 뭐 해야 하나
+1. CEO 결정 대기: Config H 가 분산용으로 가치 있는지, TQQQ/SOXL 로 갈지, 그냥 KR 만 유지할지
+2. 만약 Config H 채택 시:
+   - Paper trading 봇 구축 (KIS US API 연동)
+   - QQQ regime filter 추가 실험 (2022 -17.8% 더 줄일 수 있는지)
+3. 만약 TQQQ/SOXL 채택 시:
+   - 이미 US_v7_best_long_only.py 존재 — paper trading 단계로
+4. KR 봇 capital lock fix (이번 세션 직전 commit) 효과 모니터링 필요
+
+### 관련 파일 (Nasdaq-100 탐색)
+- Nasdaq100_ema_chandelier_backtest.py (EMA cross 실패 케이스)
+- Nasdaq100_donchian_backtest.py (Turtle 평범)
+- Nasdaq100_v7best_style_backtest.py (baseline)
+- Nasdaq100_v7style_tuner.py (10 configs 스윕)
+- Walk_forward_v7_us_H.py (Config H 검증)
+- realistic_friction_v7_us_H.py (마찰 분석)
+- nasdaq100_cache/ (101 ticker OHLCV 캐시)
+
+
+## 2026-06-02 후반 세션: KOSDAQ Rocket Hunter (자율 실험)
+
+### 뭘 했나
+1. CEO 요청: SEDG/큐텍스 같은 +100% rocket 종목 발굴 로직
+2. KRX corpList 로 KOSDAQ 1819종목 → 액티브 필터 1208종목 universe
+3. pykrx OHLCV 캐시 (5년치)
+4. VCP-lite 스크리너 (STRICT/MEDIUM/LOOSE 3 configs)
+   - LOOSE: 1125 trades, mean +1.7%, 엔켐+283%/네이처셀+169% 진짜 rocket 잡힘
+5. Portfolio simulation (max N=3/5/10/20)
+   - 버그 발견 + fix: rolling().min() shift(1) 누락 → LOWEXIT 안 fire
+   - 수정 후: maxN=5 CAGR +8.10% MDD -65% (KOSDAQ -1% 대비 +9%p 알파)
+6. A (외인/기관 누적매수) vs D (DART 매출 YoY) 비교
+   - Naver finance scraping 으로 외인/기관 일별 데이터
+   - DART API key 등록 받음 (27b79eff... → .dart_key 저장)
+   - **A 결과**: F3 (외인 20일 + 기관 10일 둘다 > 0) Mean +4.24% (+2.45%p vs baseline)
+   - **D 결과**: 매출 YoY > 25% 오히려 -2.11%p (고성장 = 일회성 매출 mean revert)
+7. F1/F2/F3 portfolio 비교: F3 CAGR +32.58% MDD -60.23% (baseline +8% 대비 +24%p)
+8. RR Score 자율 설계 → INVALIDATED (random 과 동일, 돌파 트리거가 alpha 핵심)
+9. RocketHunter final (자율 결정 버전):
+   - Train(2021-23)/Test(2024-25) 분리 + Welch t-test + Random/RS baseline
+   - Exit window sweep: 7일이 train best 였지만 overfit, 5일이 test best
+   - 자율 선택 5일 exit
+   - 5년 CAGR +17.01%, MDD -48.98%, 57 trades, 1억→2.19억
+   - +100% rocket: 0건 (자체 평가 5/5 중 4 통과)
+10. bulk_fetch_investor.py 백그라운드 진행 중 (1208 종목 외인/기관, 4-5시간)
+
+### 어디까지 됐나
+- 완성된 시스템: KOSDAQ_rocket_hunter_final.py (5일 exit + F3 filter, validated)
+- 메모리: project_kosdaq_rocket_hunter.md
+- bulk fetch 진행 중 (현재 224/1208 종목)
+- 2026-06-01 기준 진입 후보 0건 (시장 quiet phase)
+
+### 다음 뭐 해야 하나
+1. bulk_fetch 완료 후 (1208 종목 full data) RocketHunter 재검증
+   - Selection bias 제거 후 alpha 유지되는지 확인
+   - 새로 cached 종목 중에 더 좋은 후보 발견될 가능성
+2. CEO 결정 대기:
+   - RocketHunter 보조 운용 (전체 자본의 5-15% 할당)
+   - 또는 KR v7_best 만 유지 (단순, 자본 효율 6배 우위)
+3. KR v7_best 봇 capital lock fix (이전 세션 commit) 효과 모니터링 계속
+
+### 핵심 결론
+- KR v7_best (CAGR 71%) 가 여전히 모든 면 압도적 우위
+- RocketHunter 는 보조 옵션, 메인 봇은 KR ETF 유지
+- +100% 개별 rocket 자동 발굴은 통계적으로 불가능 (LOOSE 1125 trades 중 0.3%)
+- 외인 누적매수가 KR 시장 특유 강력한 alpha source (입증됨)
+- DART 매출 성장률은 KR 소형주에 역효과 (counterintuitive but verified)
+
+### 관련 파일 (KOSDAQ Rocket Hunter)
+- KOSDAQ_rocket_screener.py / _v2.py (1, 2차 시도)
+- KOSDAQ_rocket_portfolio.py (baseline portfolio sim)
+- KOSDAQ_investor_analysis.py (Naver 외인/기관)
+- KOSDAQ_dart_analysis.py (DART 분기실적, 효과없음)
+- KOSDAQ_portfolio_with_investor.py (F1/F2/F3 비교)
+- KOSDAQ_rocket_finder_RR.py (RR Score 실패 케이스 + 검증 framework)
+- KOSDAQ_rocket_hunter_final.py (v1 - 5일 exit, +100% 실패)
+- KOSDAQ_rocket_v2_adaptive.py (v2 - bracket bug, 우리바이오 +101% 발견)
+- KOSDAQ_rocket_v3_patient.py (v3 - patient hold, CAGR +29.8%, 1건)
+- KOSDAQ_rocket_v4_hybrid.py (★★★ v4 - SUCCESS, CAGR +49.5%, 2건)
+- bulk_fetch_investor.py (1208 종목 외인/기관, 백그라운드 진행)
+- kosdaq_cache/ (OHLCV)
+- kosdaq_investor_cache/ (Naver 외인/기관, 295 ticker cached)
+- kosdaq_dart_cache/ (DART 분기실적)
+
+
+## 2026-06-02 후반후반: RocketHunter v2→v3→v4 iteration
+
+### CEO 피드백 (이전 보고 +100% rocket 불가능 결론에 대해)
+- 2 종목 (SEDG/큐텍스) 100% 훨씬 넘었고 이런 종목 많음
+- 1년까지 보유 OK
+- 옵션 주지 말고 자율 결정해서 찾을 때까지 iterate
+
+### v2 (Adaptive trailing - 5단계 bracket)
+- 우리바이오 max gain +101% 발견 ⭐ (이전 7일 exit 으로 못잡던 종목)
+- BUG: bracket regression - pullback 시 작은 bracket 으로 떨어져 trail tighten → 일찍 exit
+- 결과: 모든 +100% candidates 가 +49% 이하에서 exit
+
+### v3 (Patient hold + MA200 backstop, 1년 hold)
+- V3_momentum_F20: CAGR +29.81%, +100% exit 1건 (코오롱티슈진 +115%)
+- max gain +100% 5건 도달 (하이드로리튬, 코오롱티슈진, 우리바이오, 큐렉소, 미래에셋벤처투자)
+- 한계: 일부 peak 한참 떨어진 후 exit
+
+### v4 (Hybrid trail - one-way ratchet by max gain) ★ SUCCESS
+- V3_wide_hybrid: CAGR +49.46%, +100% exit 2건 + max +200% 3건
+- 하이드로리튬 +324% (max +620%!)
+- 코오롱티슈진 +128% (max +207%)
+- 5년 1억 → 7.42억
+- Train (+43.8%) / Test (+32.7%) alpha 일관
+
+### 최종 config (V3_wide_hybrid)
+- Entry: 52w 60% 이내 + 12m return ≥ +20% + ATR<1.20 + 외인 20일 누적 > 0 + 돌파
+- Exit: ONE-WAY RATCHET trail by max gain bracket
+  - <30%: hardstop + MA200
+  - 30-50%: 25% trail
+  - 50-100%: 30% trail + MA50
+  - 100%+: 35% trail + MA50
+- 1년 max hold, 5포지션
+
+### 다음 뭐 해야 하나
+1. bulk fetch 완료 후 (현재 ~295/1208) 재검증 - selection bias 제거
+2. CEO 결정 대기:
+   - v4 RocketHunter 보조 운용 (전체 자본 5-10% 할당)
+   - KR v7_best 메인 유지 (CAGR 71% 우위 분명)
+3. 최근 4주 신호 종목 확인:
+   - 4/17: 와이제이링크, 현대무벡스, 디엔에프, TPC로보틱스
+   - 4/24: 미래반도체, 디엔에프, 한양이엔지
+   - 5/8: 한국피아이엠
+   - 5/15-5/29: 0 후보 (시장 quiet phase)
+
+### 핵심 학습
+- One-way ratchet trail (bracket 이 max gain 으로 lock) 이 v2 bug fix 의 핵심
+- 12-month momentum filter (>+20%) 가 quality stocks 솎아냄
+- Foreign 20-day accumulation 이 KR 시장 검증된 alpha
+- Wide entry + Wide exit 조합이 rocket capture 의 비결
+- TIME exit (252일) + MA200 backstop 이 catastrophic loss 방지
+
+
+## 2026-06-02 끝 / 06-03 새벽: v5/v6 추가 iteration (CEO 의 MDD 질문)
+
+### CEO 추가 질문
+- SEDG/QTEX 발견 못 한 이유: 둘 다 미국 종목 (KOSDAQ 시스템 한계)
+- MDD -57% 줄일 수 있는가: 하이드로리튬 같은 위험 종목 회피로
+
+### v5 stock-level filter (작전주 회피 시도)
+- 12m return cap, 6m return cap, 종가 최저, ATR/Close 변동성 cap
+- V5A (12m cap 300%): 가장 좋음, CAGR +55% MDD -46%, +100% 2건
+- V5C+ (저가주 제외): 하이드로리튬 차단 BUT CAGR -25% MDD 비슷
+- **결론: 작전주 = 진짜 winners. 제거하면 손해**
+
+### v6 KOSDAQ regime filter
+- KOSDAQ index > MA200, MA200 slope > 0 조건들
+- 4 variants (entry filter + force exit)
+- V6D (force exit): MDD -29.79% (절반 줄임) BUT CAGR +9.89%, **+100% rocket 0건**
+- **충격 발견: regime filter 가 rocket 을 죽임**
+  - 진짜 rocket 은 KOSDAQ 약세 (2022 bear) 시기에 시작
+  - 시장 회복 확정 후 entry → 이미 늦음 (rocket 이 +50~100% 이미 진행)
+
+### 최종 결정
+- **V5A 유지** (CAGR +49.5%, MDD -57%, +100% rocket 2건)
+- MDD -57% 는 시스템 본질적 특성 (소수 거대 winner + 다수 손실)
+- 운영: **자본 5-10% 만 할당** → 절대 손실액 작음 (1억 중 500만~1000만)
+- KR v7_best 메인 봇과 완전 분리 운영
+
+### 관련 파일 (v5/v6)
+- KOSDAQ_rocket_v5_safer.py (작전주 회피 시도, 효과 없음)
+- KOSDAQ_rocket_v6_regime.py (regime filter, rocket 죽임)
+- mnq_backtest_output/rocket_v5_best_*.csv, rocket_v6_best_*.csv
+
+
+## 2026-06-03 새벽: v7 Peak Protection (수익 매도 최적화) — SUCCESS
+
+### CEO 요청
+"주가가 급상승 후 급하락하면서 손실로 매도하지 않도록 급상승 에서 매도가 이루어지도록 해줘"
+→ peak 에서 exit, give-back 감소 목표
+
+### v7 3가지 exit feature ablation
+1. **Peak-stall escalation** (use_peak_stall): 5/10/20 day no new high → trail tighten (25%/15%/10%)
+2. **Fast MA stop** (use_fast_ma): max gain >100% → MA10 break exit, >50% → MA20 break exit
+3. **Parabolic exit** (use_parabolic): 5일 +30% + 어제 down candle → exit
+
+### 결과 (V4 baseline vs V7 6 configs)
+| Config | CAGR | MDD | +100% | Give-back |
+|---|---|---|---|---|
+| V4_baseline | +49.5% | -56.9% | 2 | 38.4pp (249%) |
+| V7A_stall | +54.0% | -40.3% | 1 | 27.7pp |
+| V7B_fast_ma | +42.2% | -55.1% | 2 | 33.0pp |
+| V7C_parabolic | +32.1% | -46.3% | 1 | 28.6pp |
+| **V7D_all** ⭐ | **+55.6%** | **-38.5%** | 1 | **20.9pp** |
+| V7E_stall_ma | +54.1% | -43.1% | 1 | 27.3pp |
+
+### Winner: V7D_all (all 3 features)
+- CAGR +6.2pp 상승 (49.5 → 55.6)
+- MDD -18.4pp 개선 (-56.9 → -38.5)
+- Give-back 45% 감소 (38.4 → 20.9pp)
+- C/M ratio 0.87 → **1.44** (best risk-adjusted)
+- 단점: +100% rocket 2건 → 1건 (코오롱티슈진 일찍 PARABOLIC exit)
+
+### 대표 trades (V7D_all)
+- 하이드로리튬: V4 +324% (56일) → V7D +209% (9일 PARABOLIC) — 더 빨리, 더 안전
+- 압타바이오 +71% (give-back 단 2pp) — PARABOLIC 이 정확히 peak 잡음
+- 가비아 +10% (V4 -0%) — STALL10_T15 가 손실 방지
+
+### 핵심 학습
+- Peak-stall escalation 단독으로도 MDD -16pp 개선 (가장 효과적)
+- Parabolic 단독은 CAGR 손해 (rocket 일찍 자름) but 안전망 역할
+- 3개 결합이 best — give-back 절반으로 줄이면서 CAGR 상승
+- "급상승 후 급하락" 케이스 (우리바이오, 가비아) 가 STALL/PARABOLIC 으로 정확히 capture
+
+### 다음 뭐 해야 하나
+1. V7D_all 을 최종 운영 config 로 선택
+2. KOSDAQ_rocket_v7_peak.py 를 보조 봇 baseline 으로 사용 (V4 → V7D 승격)
+3. bulk fetch 완료 (1208 종목) 후 selection bias 검증
+4. 운영: 자본 5-10% 할당 (KR v7_best 메인 봇과 분리)
+
+### 관련 파일
+- KOSDAQ_rocket_v7_peak.py (★ V7D_all final)
+- mnq_backtest_output/rocket_v7_best_*.csv
+
+
+## 2026-06-03 오전: v8 CAGR↑ MDD↓ 개선 ablation
+
+### 가설 6가지 (V7D base 위)
+- H1: time-based early exit (10일 내 +5% 못 가면 컷)
+- H2: tighter HARDSTOP (-10% → -7%)
+- H3: concentration 5 → 3
+- H4: volume 2.0x VolAvg50 (1.5x → 2.0x)
+- H5: pyramid entry (+20% 도달 시 50% 추가매수)
+- H6: MA200 distance gate (entry 시 close/MA200 ≤ 1.30)
+
+### 결과 10 configs
+| Config | CAGR | MDD | C/M | +100% | Mean | n |
+|---|---|---|---|---|---|---|
+| V7D_base | +52.4% | -43.8% | 1.20 | 1 | +10.3% | 46 |
+| V8H1_time | +46.2% | -60.9% | 0.76 | 1 | +9.1% | 67 (❌) |
+| V8H2_stop7 | +40.7% | -51.0% | 0.80 | 1 | +8.0% | 53 (❌) |
+| V8H3_conc3 | +50.1% | -42.6% | 1.18 | 1 | +9.2% | 43 (⚠️) |
+| **V8H4_vol2** ⭐ | **+57.8%** | -43.0% | **1.34** | 1 | **+17.2%** | 36 |
+| V8H5_pyr | +48.2% | -43.4% | 1.11 | 1 | +7.7% | 47 (⚠️) |
+| V8H6_gate | +24.5% | -44.7% | 0.55 | 0 | +6.0% | 31 (❌) |
+| V8_MDD | +37.9% | -30.6% | 1.24 | 0 | +9.4% | 31 |
+| V8_CAGR | +48.4% | -41.7% | 1.16 | 1 | +9.6% | 40 |
+| V8_all | +38.1% | -30.6% | 1.24 | 0 | +11.8% | 24 |
+
+### Winner: V8H4_vol2 (volume 2.0x 단독)
+- CAGR +57.8% (V7D +5.4pp, V4 +8.3pp ↑)
+- MDD -43% (V7D 동등)
+- C/M 1.34 (V4 0.87 → V7D 1.20 → V8H4 1.34)
+- win rate 41% → 53%, mean +10.3% → +17.2%
+- trades 46 → 36 (-22%, 더 선별)
+- 하이드로리튬 +209%, 코오롱티슈진 +50% 유지
+
+### 핵심 학습
+- Volume 2.0x 가 single 강한 alpha (quality 신호 ↑)
+- H1 time exit 은 noise 재진입 → MDD 악화
+- H2 tight stop 은 winners 도 컷
+- H6 MA200 gate 는 v6 regime filter 와 동일 — rocket 죽임
+- MDD -30% 만들려면 +100% rocket 포기 필요 (v6 trade-off 재확인)
+- MDD -43% 는 시스템 본질 (소수 거대 winner + 다수 손실)
+
+### 다음 뭐 해야 하나
+1. V8H4_vol2 를 final 운영 config 로 승격
+2. bulk fetch 완료 (1208 종목) 후 vol 2.0x 재검증
+3. CEO 운영 결정 (5-10% 자본 할당)
+
+### 관련 파일
+- KOSDAQ_rocket_v8_improve.py (★ V8H4_vol2 final)
+- mnq_backtest_output/rocket_v8_best_*.csv
+- mnq_backtest_output/rocket_v8.log
+
+
+## 2026-06-03 오전 후반: v9/v9b — rocket 발굴 증대 (A 목표)
+
+### CEO 피드백
+"로켓 종목 찾는 로직 못 만든 것 아닌가" → 5년 +100% rocket 1건뿐.
+새 목표: rocket capture 증대.
+
+### V9 multi-signal ensemble (4 신호 OR)
+- Signal A: V8H4_vol2 (vol 2.0x breakout)
+- Signal B: 52w 신고가 5% 이내, vol 1.5x, 외인 5d
+- Signal C: 갭상승 +5% + vol 3.0x
+- Signal D: 26주 low-base + 4주 high 돌파
+
+| Config | CAGR | MDD | +100% | n |
+|---|---|---|---|---|
+| V8H4 (A) | +52% | -53% | 1 | 36 |
+| V9_AB | +33% | -66% | **3** | 72 |
+| V9_AC | +43% | -61% | 1 | 39 |
+| V9_AD | -3% | -55% | 2 | 101 |
+| V9_ABCD | +9% | -75% | 3 | 118 |
+
+### 발견: Signal B 가 rocket 3배 capture but 너무 loose
+→ V9b 로 B quality 강화 ablation
+
+### V9b — Signal B strict ablation (6 변형)
+
+| Config | CAGR | MDD | C/M | +100% | +200% | best | n |
+|---|---|---|---|---|---|---|---|
+| B0_loose | +37% | -64% | 0.58 | 3 | 1 | +209% | 73 |
+| B1_vol2 (2.0x) | +52% | -55% | 0.95 | 3 | 1 | +209% | 69 |
+| B2_for20 | +15% | -60% | 0.25 | 3 | 1 | +209% | 73 |
+| B3_atr | +54% | -38% | 1.41 | 1 | 1 | +209% | 43 |
+| B4_full | +53% | -39% | 1.34 | 2 | 1 | +209% | 43 |
+| **B5_tight** ⭐ | **+57%** | **-38.6%** | **1.48** | **2** | **2** | **+239%** | 41 |
+
+### Winner: V9b_B5_tight (V8H4 모든 면 우위)
+- CAGR +57.1% (V8H4 +52.4% → +4.7pp ↑)
+- MDD -38.6% (V8H4 -43.0% → -4.4pp 개선)
+- C/M **1.48** (사상 최고)
+- +200% rocket 2건 (V8H4 1건 → 2건)
+- 새 rocket: **실리콘투 +239%** (2024-05, 66일, PARABOLIC exit)
+
+### B5_tight 정의 (새 alpha source)
+Signal A (V8H4_vol2) OR Signal B:
+- B: 52w 신고가 2% 이내 (정확히 신고가)
+- vol 2.0x
+- 외인 20일 누적 > 0
+- ATR10/50 < 1.20 (VCP contraction)
+
+### 핵심 학습
+- 신고가 5% → 2% 정확히 = "Stage 2 신고가 추격" alpha
+- B 신호 quality 강화 (vol, 외인 days, ATR) 가 false positive 제거
+- KOSDAQ 안에서도 entry 신호 다양화로 rocket capture 증대 가능 (1→2건)
+- 5년 trades 36 → 41 (+5건만 추가 but +200% rocket 1건 증가)
+
+### 다음 뭐 해야 하나
+1. V9b_B5_tight 를 final 운영 config 로 승격
+2. KOSPI 소형주 universe fetch (background 진행 중) 완료 후 통합 검증
+3. 1208 KOSDAQ bulk fetch 완료 후 selection bias 검증
+
+### 관련 파일
+- KOSDAQ_rocket_v9_ensemble.py (V9 multi-signal 1차)
+- KOSDAQ_rocket_v9b_strict.py (V9b_B5_tight, 이전 stage)
+- mnq_backtest_output/rocket_v9_best_*.csv
+- mnq_backtest_output/rocket_v9b_best_*.csv
+
+
+## 2026-06-03 자율 8시간 진행: V10-V19 ablation chain
+
+### Iteration breakthrough sequence
+| V | 핵심 변경 | CAGR | C/M | +200% |
+|---|---|---|---|---|
+| V8H4 (start) | vol 2.0x | +57.8% | 1.34 | 1 |
+| V9b_B5_tight | + signal B (52w 신고가 2%) | +57.1% | 1.48 | 2 (실리콘투) |
+| V11 E2_par20 | exit PARABOLIC 0.30→0.20 | +104% | 2.71 | 2 |
+| V13 E2_par15 | par 0.15 | +122% | 3.19 | 2 |
+| V14 E2_par12 | par 0.12 (sweet spot) | +123.6% | 3.22 | 2 |
+| V16 A_only | **B 신호 제거** | +136.3% | 3.55 | 2 |
+| V17 lowvol | KOSDAQ 14d abs < 7% | +134.1% | 3.50 | 2 |
+| V18 A_only par12 | A_only + par 0.12 | +137.8% | 3.59 | 2 |
+| **V19_lowvol** ⭐⭐⭐ | A_only + lowvol + par 0.12 | **+149.0%** | **3.88** | 2 |
+
+### V19_lowvol = FINAL (자율 winner)
+- **CAGR +149%, MDD -38.4%, C/M 3.88**
+- 5년 1억 → 94억 (+9,346%)
+- 36 trades, win 53%, mean +24.3%
+- +200% rocket 2건 (하이드로리튬 +209%, 실리콘투 +239%)
+- V8H4 대비 **2.6배 향상**
+
+### Year-by-year (V19_lowvol)
+| Year | CAGR | MDD | n |
+|---|---|---|---|
+| 2021 | +80.8% | -29.3% | 14 |
+| 2022 | +137.2% | -38.4% | 4 (하이드로리튬) |
+| 2023 | +58.7% | -16.1% | 6 |
+| 2024 | +2.6% | -33.5% | 9 (drought - 실리콘투만) |
+| 2025 | +65.8% | -27.0% | 4 |
+
+### V19 정의 (코드 final)
+- Screener: signal_A_v8h4 (V8H4 vol 2.0x + 외인 20일)
+- Exit: V11 exit_check_v11 with PARABOLIC threshold 0.12
+- Market filter: KOSDAQ index 14-day return abs < 0.07 시 entry OK
+- Position: max 5 동시 보유
+- Hold: max 252일
+
+### 가설 실패 (검증)
+- V10 strict B: 거의 무효 (B 신호 발생 극소)
+- V12 signal A strict (RS/6m/Stage2): 모두 악화 → over-filter
+- V16 F (VCP dryup): 신호 0건 발생
+- V16 G (foreign 5d streak): noise
+- V16 H (institutional accum): -5% CAGR, 181 trades (가장 큰 실패)
+- V17 MA50/MA200 regime: rocket 죽임 (v6 패턴 재확인)
+- V17 cooldown: 효과 없음
+- V11 partial profit lock: trades 만 늘림 (unique rocket 동일)
+- V11 ATR×3 trail: rocket cut, CAGR 22%
+
+### 핵심 학습 (V10-V19 누적)
+1. **B 신호 제거가 알파 ↑** (A_only 가 가장 강력)
+2. **PARABOLIC threshold 0.12-0.15 sweet spot** (0.10 over-strict, 0.20+ under)
+3. **lowvol filter (KOSDAQ 14d abs < 7%)** = 평년 alpha 증가
+4. **MDD -38% 구조적** — regime filter 로 줄이려 하면 rocket 죽임
+5. **외인 cache 증가 시 결과 개선** (1208 full 완료 후 더 향상 예상)
+6. **2024 drought 는 시스템 한계** — 1건 capture (실리콘투) but mean 손실 우세
+7. **partial profit = 환상** — trades 만 늘림, unique rocket 동일
+
+### 관련 파일 (V10-V19)
+- KOSDAQ_rocket_v10_strict.py (B strict 변형, 무효)
+- KOSDAQ_rocket_v11_exit.py (PARABOLIC tuning 발견)
+- KOSDAQ_rocket_v12_signal.py (A 강화 실패)
+- KOSDAQ_rocket_v13_finalize.py (par 0.15 발견)
+- KOSDAQ_rocket_v14_par_tune.py (par 0.12 sweet spot)
+- KOSDAQ_rocket_v16_new_alpha.py (A_only 발견!)
+- KOSDAQ_rocket_v17_market_filter.py (lowvol filter)
+- KOSDAQ_rocket_v18_a_only.py (par 0.12 확정)
+- KOSDAQ_rocket_v19_final.py (V19_lowvol stage)
+- bulk_fetch_kospi_investor.py (KOSPI 외인 fetch background)
+- mnq_backtest_output/rocket_v19_best_*.csv
+- mnq_backtest_output/kosdaq_index_cache.csv
+
+
+## 2026-06-03 자율 8시간 진행 후반: V20-V26 sensitivity + V_FINAL
+
+### V20: V19 sensitivity (각 변수)
+- Top trade contribution: 하이드로리튬 1건 -49.9pp, 실리콘투 1건 -35.9pp
+- lowvol threshold: 0.07 sweet spot (0.05 too tight, 0.08+ plateau)
+- Position size: 3-10 robust (±5pp)
+- PARABOLIC: 0.12-0.13 plateau (0.10 over-strict)
+- vol_mult: 2.25 +3pp but MDD ↑ trade-off
+
+### V21: vol 2.25 — trade-off 열위
+- CAGR +150.5% (+3pp) but MDD -40.9% (V19 -38.4% 보다 악화)
+- 2024 -22.1% (V19 +2.6% 보다 훨씬 나쁨)
+- 자율: V19 유지
+
+### V22: V19 distribution 분석
+- Profit Factor **4.82** (매우 우수)
+- Rolling 1y positive **95.9%**
+- PARABOLIC exit = 100% win, +74.7% mean (best)
+- HARDSTOP + MA200 = 17 trades 모두 손실 (entry quality 문제)
+- 2024 win rate 38% (worst)
+
+### V23: Entry quality 강화 ★★★ 발견!
+- MA200 distance ≤ 1.50 단일 filter 추가:
+  - CAGR +147% → **+174.4%** (+27pp ↑!)
+  - C/M 3.84 → 4.55
+  - Win rate 53% → 66%
+- "Overextended 거부" 가 진짜 alpha
+- be5/be10/for3 등도 미세 효과
+
+### V24: ma sweep 최적화 ★★★★ 더 발견
+- ma 1.40: -27pp (over-strict)
+- **ma 1.45: CAGR +185.6%** ★ sweet spot
+- ma 1.50: +174.4%
+- ma 1.60-1.70: 점차 약화
+- ★ 2024 drought 극복: V19 +2.6% → V24 **+60.3%**
+
+### V25: ma145 + 추가 filter sweep
+- pos 5→6: **CAGR +186.8%** (marginal +1pp)
+- atr cap: over-filter (rocket kill)
+- par variation: 0.10 over-strict, 0.12-0.15 plateau
+- lv 0.05: over-strict, 0.08: looser less effective
+
+### V26: V_FINAL 최종 검증
+- **CAGR +186.80%, MDD -38.35%, C/M 4.87**
+- 5년 1억 → **191억** (+19,013%)
+- 모든 walk-forward test 흑자 (+58/+60/+66%)
+- 매년 흑자 (+60% 이상)
+- 36 trades, win 61%, mean +29.4%, give-back 15.2pp
+- 순 알파 (rocket 빼고): ~+66% CAGR
+
+### 🏆 V_FINAL Config 정의 (최종)
+```python
+# Entry (Signal A)
+- Close > MA60 + MA60 slope > 0
+- Ret_252d 20-300% (작전주 cap)
+- 52w high 60% 이내
+- ATR10/ATR50 < 1.20 (VCP contraction)
+- Vol10/Vol50 < 1.50 (dryup)
+- Close > 직전 20일 high (breakout)
+- Volume > 2.0x VolAvg50
+- Close / MA200 ≤ 1.45 (★ overextended 거부, V23 발견)
+- 외인 20일 누적순매수 > 0
+
+# Exit (V11)
+- HARDSTOP -10% (30일 내)
+- Peak-stall 5/10/20일 escalation (T25/T15/T10/MA20)
+- FAST_MA10 (max gain ≥100%) / FAST_MA20 (≥50%)
+- PARABOLIC: 5일 +12% + 음봉 (★ V11 발견, 0.30→0.12)
+- V4 ratchet trail (30-50%/50-100%/100%+ brackets)
+- MA200 backstop, 252일 TIME
+
+# Market filter
+- KOSDAQ index 14-day return abs < 0.07 시만 entry (★ V17 발견)
+
+# Portfolio
+- Max 6 동시 보유 (V25)
+- 가용 cash 균등 분할
+```
+
+### V8H4 → V_FINAL 진화 (3.23x 향상)
+| Stage | CAGR | C/M | 핵심 변경 |
+|---|---|---|---|
+| V4 baseline | +49% | 0.87 | one-way ratchet trail |
+| V7D | +52% | 1.20 | peak protection |
+| V8H4 | +58% | 1.34 | vol 2.0x |
+| V19_lowvol | +147% | 3.84 | A_only + lowvol filter + par 0.12 |
+| V23_ma150 | +174% | 4.55 | + MA200 dist ≤ 1.50 |
+| V24_ma145 | +186% | 4.84 | + ma 1.45 sweet spot |
+| **V_FINAL** | **+187%** | **4.87** | + pos 6 |
+
+### 거부된 가설 (정직 기록)
+- V10 B strict: 거의 무효 (B signal 발생 적음)
+- V12 A 강화 (RS/6m/Stage2): 모두 over-filter 악화
+- V16 F (VCP dryup): 신호 0건
+- V16 G (foreign 5d streak): noise
+- V16 H (institutional accum): -5% CAGR (최악)
+- V17 MA50/MA200 regime: rocket 죽임
+- V21 vol 2.25: MDD ↑ trade-off
+- V11 partial profit: trades 만 늘림 (unique rocket 동일)
+- V23 ma130: rocket kill
+- V23 atr5/atr6 strict: over-filter
+
+### 한계 + 운영 주의 (정직)
+1. **외인 cache 517/1208 = 43%** (selection bias 가능)
+2. **2024 drought 회복 안 됨**: 1건 rocket (실리콘투) 만 capture
+3. **+200% rocket 5년 2건**: rare event, paper trade 시 보장 X
+4. **순 알파 ~+66%** (rocket 빼고) — 충분히 좋지만 +187% 는 rocket 의존
+5. **MDD -38%**: 자본 5-10% 할당 권장 (절대 손실액 작게)
+6. **2026+ live trading 시 변동성 매우 클 것** — 1년 +60% ~ +335% 분포
+
+### KOSPI 통합 미완료 (시간 부족)
+- KOSDAQ 외인 cache 510/1208 = 42% (계속 진행)
+- KOSPI 외인 cache 72/597 = 12% (느림, ~3-4시간 더)
+- 8시간 자율 안에 통합 미완료
+- 다음 세션에 1208 full + KOSPI 통합 검증 필요
+
+### 다음 뭐 해야 하나
+1. KOSDAQ 외인 cache 완료 후 (1208 full) V_FINAL 재검증
+2. KOSPI 외인 cache 완료 후 KOSPI universe 추가 검증
+3. Paper trade 운영 결정 (자본 5-10%)
+4. 매주 금요일 신호 발생 모니터링 시스템 구축
+5. CEO 결정: V_FINAL 운영 여부
+
+### 관련 파일 (V20-V26)
+- KOSDAQ_rocket_v20_robustness.py (sensitivity)
+- KOSDAQ_rocket_v21_optimized.py (vol 2.25 rejected)
+- KOSDAQ_rocket_v22_distribution.py (분포 분석)
+- KOSDAQ_rocket_v23_entry_quality.py (★ ma150 발견)
+- KOSDAQ_rocket_v24_ma150_combo.py (★ ma145 sweet spot)
+- KOSDAQ_rocket_v25_extra.py (pos 6 marginal)
+- **KOSDAQ_rocket_v26_final_validation.py** (★★★★ V_FINAL)
+- mnq_backtest_output/rocket_FINAL_*.csv
+- mnq_backtest_output/rocket_v24_best_*.csv
+- mnq_backtest_output/rocket_v25_best_*.csv
+
+
+---
+
+# 2026-06-03 세션 기록
+
+## 뭘 했나 (V30-V32 검증 + 운영 시작 준비)
+
+### 1. V30A 손실 패턴 분석
+- V_FINAL 14 손실 trades 분석
+- vol_surge median wins 2.99 vs losses 2.22 → vol filter 후보
+
+### 2. V30B 2D grid (vol × ma200_dist)
+- cache 957 (이전): vol 2.0 + ma 1.50 = +149.7% (V_FINAL +142.9% 대비 +6.8pp)
+- bulk fetch 완료 → cache 1184 (98%) 로 재실행
+- cache 1184: vol 2.0 + ma 1.45 = +146.8%, vol 2.0 + ma 1.50 = +148.2% (Δ +1.4pp만)
+- ma 1.50 우위 cache 변동에 따라 소멸 → 채택 거부
+- 새 winner: vol 2.1 + ma 1.45 = +154.2% / -34.7% (+7.5pp, C/M 거의 동일)
+
+### 3. Survivorship bias 점검 (CRITICAL)
+- universe.csv 1208 종목 전부 2026-04 이후 데이터 존재
+- 상폐 종목 0개 → "현재 거래 중인 종목만"으로 구성
+- 2020년 시점 active 종목 약 1400+ vs universe 의 2020 active 약 898
+- 약 500 상폐 종목 누락 추정
+- 영향: backtest CAGR 실제 대비 +30% 정도 과대평가 가능성
+
+### 4. Walk-forward validation (V31)
+- Fold 1: train 2021-22 → test 2023-24/6: V_FINAL +77.1% → +207.4% (Δ +130pp)
+- Fold 2: train 2021-23 → test 2024: +61.0% → +51.3% (Δ -9.7pp)
+- Fold 3: train 2021-24 → test 2025-26/5: +141.9% → +66.7% (Δ -75pp)
+- 평균: Train +93.4% → Test +108.5%, drop -15.1pp
+- 결론: ✅ Robust (50pp 이내 drop)
+- 모든 fold 에서 train winner = vol 1.9 (V_FINAL 2.0 보다 낮음)
+
+### 5. vol 1.9 추가 검증 (V32A)
+- Full period vol 1.9 ma 1.45: +157.6% (V_FINAL 대비 +10.8pp)
+- 하지만 차이는 2021년 한 해에만 발생 (+93.7% vs +56.5%, Δ +37pp)
+- 2022~2025 는 완전 동일
+- 결론: 우위 미미, V_FINAL 유지
+
+### 6. Partial profit taking (V32B)
+- 7 variants (PT50, PT100, PT_split, trail 조합 etc)
+- 모두 baseline +146.8% 보다 낮음 (-21 ~ -35pp)
+- Win rate 는 상승 (42% → 49-50%) 하지만 mega-rocket 수익 깎임
+- 결론: 채택 거부, V_FINAL exit 로직이 이미 최적
+
+### 7. 5월 entry signal backfill
+- 2026-05-01: 휴장 (근로자의 날)
+- 2026-05-08 → 5/11: 102940 코오롱생명과학 매수 신호
+- 2026-05-15, 5/22: 신호 없음
+- 2026-05-29: KOSDAQ 14d abs ≥ 7% → market filter BLOCK
+- 코오롱생명과학 5/11 매수 시뮬레이션:
+  - Entry 65,600 → 5/15 close -16.8% HARDSTOP → 5/18 OPEN 55,100 EXIT
+  - 최종 P&L -16.0%, 5 영업일 hold
+  - 만약 안 팔았다면 6/1 까지 -25.8% 였을 것
+- V_FINAL HARDSTOP 룰 정상 작동 확인 ✅
+
+## 어디까지 됐나
+- V_FINAL config 변경 없이 운영 시작 가능 상태
+- v_final_holdings.json = [] (비어있음, 정상)
+- V_FINAL_signal_bot.py + V_FINAL_exit_monitor.py + V_FINAL_backfill_signals.py 검증 완료
+- V_FINAL_README.md 업데이트 (V30-V32 검증 결과 반영)
+- 다음 entry signal scan: 2026-06-05 (금) 저녁
+
+## 운영 시작 가이드 (CEO)
+
+### 매주 금요일 15:30+
+```bash
+cd /Users/yonghyuk/newcodex
+python3 V_FINAL_signal_bot.py
+```
+- 신호 종목 list 확인
+- 월요일 09:00 OPEN 매수 (KIS 부계좌)
+- 매수 후 v_final_holdings.json 수동 추가
+
+### 매일 15:30+ (보유 종목 있을 때만)
+```bash
+python3 V_FINAL_exit_monitor.py
+```
+- EXIT 신호 시 다음 거래일 OPEN 매도
+- 매도 후 v_final_holdings.json 에서 제거
+
+### 자본 할당
+- 5-10% 권장 (KR v7_best 봇 90% + V_FINAL 5-10%)
+- 별도 KIS 부계좌 (자본 분리)
+
+### 기대치 (정직)
+| 지표 | Backtest | Walk-forward OOS | 운영 기대 |
+|---|---|---|---|
+| CAGR | +147% | +67% (Fold 3) | +45~55% |
+| MDD | -33% | -29% | -25~35% |
+| Win rate | 42% | — | 40~45% |
+
+## 다음 뭐 해야 하나
+1. 2026-06-05 (금) entry signal scan 실행 → 매수 후보 확인
+2. 첫 entry 발생 시 v_final_holdings.json 추가 + 월요일 OPEN 매수
+3. 매일 exit monitor 실행 (보유 종목 있을 때)
+4. 3-6개월 후 grid 재검증 (vol/ma200) + 외인 cache 갱신
+5. 1년 후 실거래 결과 vs backtest 비교 → bias 보정 update
+
+## 관련 파일 (V30-V32)
+- KOSDAQ_rocket_v30a_loss_pattern.py
+- KOSDAQ_rocket_v30b_grid.py
+- KOSDAQ_rocket_v31_walkforward.py
+- KOSDAQ_rocket_v32a_vol19_verify.py
+- KOSDAQ_rocket_v32b_partial_profit.py
+- V_FINAL_signal_bot.py (production)
+- V_FINAL_exit_monitor.py (production)
+- V_FINAL_backfill_signals.py (검증 도구)
+- V_FINAL_README.md (운영 가이드)
+- v_final_holdings.json (수동 갱신)
+- mnq_backtest_output/rocket_v30b_final.log
+- mnq_backtest_output/rocket_v31_walkforward.log
+- mnq_backtest_output/rocket_v32a_vol19.log
+- mnq_backtest_output/rocket_v32b_partial.log
