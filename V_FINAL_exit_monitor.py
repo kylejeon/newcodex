@@ -79,6 +79,11 @@ def exit_check(df, df_ind, target_idx, h, target_date):
 
     max_gain = (max_close / entry_px - 1) * 100
 
+    # D_BE_20: max_gain >= 20% 도달 후 close < entry → 매도 (V32H walk-forward +5.8pp 우위)
+    if max_gain >= 20 and yc < entry_px:
+        return 'BE_STOP', (f"max +{max_gain:.0f}% 도달 후 entry break "
+                           f"(close {yc:,.0f} < entry {entry_px:,.0f})")
+
     # Peak-stall escalation
     if max_gain >= 30:
         if days_since_peak >= 20:

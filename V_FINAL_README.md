@@ -141,7 +141,19 @@ python3 bulk_fetch_investor.py
 - ⚠️ Survivorship bias 존재 (universe = 현재 상장 종목만, ~500 상폐 종목 누락)
 - ❌ Partial profit taking 모두 baseline 보다 열위 (V32B)
 - ✅ **vol 1.9 ma 1.40 채택** (V32C): Fold 3 +33pp 우위, 변동성 1/3, MDD 개선
+- ❌ Exit 룰 변경 시도 다수 거부 (V32D~G): BE_STOP 5-10%, B_stall_10, C_HS_7, C7_B10 모두 OOS overfit
+- ✅ **D_BE_20 채택** (V32H): max_gain ≥ 20% 도달 후 close < entry → BE_STOP. Walk-forward 평균 +5.8pp 우위 (유일하게 OOS 통과). Fold 3 +28pp.
 - ❌ KOSPI 통합 (V28-V29) — alpha 없음 거부
+
+### Exit 룰 (V_FINAL_exit_monitor.py)
+1. HARDSTOP -10% (진입 후 30일 내)
+2. **BE_STOP** (D_BE_20): max_gain ≥ 20% 도달 후 close < entry ⭐ 신규
+3. Peak-stall (max_gain ≥ 30% 시: STALL5/10/20)
+4. FAST_MA (max_gain ≥ 50%/100%)
+5. PARABOLIC (max_gain ≥ 30% + 5d +12% + 음봉)
+6. v4 ratchet trail (TRAIL25/30/35 + MA50)
+7. MA200 backstop
+8. TIME 252일
 
 ## 한계 + 위험 (정직)
 
