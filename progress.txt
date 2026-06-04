@@ -1060,3 +1060,43 @@ if max_gain >= 20 and yc < entry_px:
 - V_FINAL_3_5_exit_sim.py (baseline 5월 시뮬)
 - V_FINAL_3_5_exit_sim_c7b10.py (C7_B10 5월)
 - V_FINAL_3_5_exit_sim_d_be_20.py (D_BE_20 5월) ⭐
+
+---
+
+# 2026-06-04 KIS daily bot 251340 사건 + 에러 핸들링 보강
+
+## 사건
+- 09:01 / 09:02 daily bot 실행 시 EGW00201 (KIS 초당 거래 한도 초과)
+- 에러 응답에는 `tr_cont` 헤더 없음 → KeyError 로 봇 크래시
+- GetBalance() 도 같은 이유로 str ('EGW00201') 반환 → 호출자 dict 접근 시 TypeError
+- 10:29:39 봇 정상 진행 시점에는 가격이 이미 stop_price 2126.5 아래 (2075) → 즉시 trigger → 시장가 매도 → 2070원 체결 (90분 lag 손실)
+
+## 근본 원인
+1. crontab lock 파일이 봇별 분리 (kosdaqpi_bot_daily.lock vs kis_stoptrader_system.lock)
+   → 9:01, 9:02 동시 실행 → KIS API 초당 한도 초과
+2. KIS_API_Helper_KR.py 에러 응답 안전 처리 미흡
+   - GetMyStockList: `res.headers['tr_cont']` 무조건 접근 → 에러 시 KeyError
+   - GetBalance / GetBalanceIRP: 에러 시 str (msg_cd) 반환 → 호출자 TypeError
+3. stop_price 계산이 시가 + 전일 range 기반 → 봇 실행 lag 시 즉시 trigger 가능
+
+## 수정사항
+### crontab (사용자 수동 수정 완료)
+- 공용 lock /tmp/kis_api.lock 으로 통합
+- daily bot 시간 1-5 9 로 확장 (rate limit 시 자동 재시도 윈도우)
+- StopTrader 9시대는 9:06부터 (daily bot 윈도우 회피)
+
+### 코드 (commit 예정)
+- KIS_API_Helper_KR.py
+  - GetMyStockList: res.headers.get('tr_cont', '') 안전 접근 + EGW00201 시 1초 대기 후 재시도
+  - GetBalance: EGW00201 시 최대 3회 재시도, 실패 시 None 반환
+  - GetBalanceIRP: 실패 시 None 반환
+- Kosdaqpi_Bot_TR_daily.py
+  - GetBalance None 체크 + GetMyStockList list 타입 체크 → 실패 시 텔레그램 알림 + 안전 종료
+- KIS_KR_StopTrader.py
+  - MakeStopLoss: 등록 시점 nowPrice <= stop_price 면 ⚠️ 텔레그램 경고 (자동 청산은 유지)
+
+## 다음
+1. commit + push
+2. 미니PC pull
+3. 내일 (6/5) 09:01 자동 실행 확인 — daily bot 정상 가동 + 9:06 StopTrader 정상 가동
+4. 향후 다른 GetBalance 호출자 (Kosdaqpi_Dashboard.py 등) 점진적 None 체크 추가 필요

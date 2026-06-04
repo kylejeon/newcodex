@@ -589,8 +589,21 @@ def MakeStopLoss(stock_code, stop_price, Exclusive=False):
     msg += "지정가 주문 자동 취소: 활성화"
     print(msg)
     line_alert.SendMessage(msg)
-    
-    return order_id 
+
+    # 등록 즉시 trigger 조건 (현재가 ≤ stop 가격) 경고 — 즉시 시장가 청산 예정
+    try:
+        if nowPrice is not None and float(nowPrice) <= float(stop_price):
+            warn = (f"⚠️ {DIST} {stock_code} {KisKR.GetStockName(stock_code)} "
+                    f"stop 등록 시점 이미 trigger 조건 충족\n"
+                    f"stop {stop_price}원 ≥ 현재 {nowPrice}원\n"
+                    f"→ StopTrader 다음 사이클에 시장가 매도 예정 "
+                    f"(봇 지연 발생 가능성 — 수동 확인 권장)")
+            print(warn)
+            line_alert.SendMessage(warn)
+    except Exception:
+        pass
+
+    return order_id
 
 # 트레일링 스탑로스 주문 함수 (해당 종목의 보유수량 전부 정리)
 def MakeTrailingStopLoss(stock_code, trailing_percent, activation_price=None, Exclusive=False):

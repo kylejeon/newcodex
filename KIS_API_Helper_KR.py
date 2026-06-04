@@ -558,9 +558,25 @@ def GetBalance():
             "CTX_AREA_NK100" : ""
         }
 
-        # 호출
-        res = requests.get(URL, headers=headers, params=params)
-        #pprint.pprint(res.json())
+        # 호출 (rate limit 시 최대 3회 재시도)
+        for attempt in range(3):
+            res = requests.get(URL, headers=headers, params=params)
+            #pprint.pprint(res.json())
+            if res.status_code == 200 and res.json()["rt_cd"] == '0':
+                break
+            print("Error Code : " + str(res.status_code) + " | " + res.text)
+            try:
+                msg_cd = res.json().get("msg_cd", "")
+            except Exception:
+                msg_cd = ""
+            # EGW00201 = 초당 거래건수 초과 → 1초 대기 후 재시도
+            if msg_cd == "EGW00201" and attempt < 2:
+                print(f"[GetBalance] Rate limit (EGW00201). Retry {attempt+1}/3 after 1s...")
+                time.sleep(1.0)
+                continue
+            # 재시도 불가능한 에러 또는 마지막 시도 실패 → None 반환
+            return None
+
         if res.status_code == 200 and res.json()["rt_cd"] == '0':
 
             result = res.json()['output2'][0]
@@ -571,35 +587,34 @@ def GetBalance():
             balanceDict['StockMoney'] = float(result['scts_evlu_amt'])
             #평가 손익 금액
             balanceDict['StockRevenue'] = float(result['evlu_pfls_smtl_amt'])
-            
-            
-                
+
+
+
             #총 평가 금액
             balanceDict['TotalMoney'] = float(result['tot_evlu_amt'])
 
             #예수금이 아예 0이거나 총평가금액이랑 주식평가금액이 같은 상황일때는.. 좀 이상한 특이사항이다 풀매수하더라도 1원이라도 남을 테니깐
             #퇴직연금 계좌에서 tot_evlu_amt가 제대로 반영이 안되는 경우가 있는데..이때는 전일 총평가금액을 가져오도록 한다!
             if float(result['dnca_tot_amt']) == 0 or balanceDict['TotalMoney'] == balanceDict['StockMoney']:
-                #장이 안열린 상황을 가정 
+                #장이 안열린 상황을 가정
                 #if IsMarketOpen() == False:
                 balanceDict['TotalMoney'] = float(result['bfdy_tot_asst_evlu_amt'])
 
 
             #예수금 총금액 (즉 주문가능현금)
             balanceDict['RemainMoney'] = float(balanceDict['TotalMoney']) - float(balanceDict['StockMoney'])#result['dnca_tot_amt']
-            
+
             #그래도 아직도 남은 금액이 0이라면 dnca_tot_amt 예수금 항목에서 정보를 가지고 온다
             if balanceDict['RemainMoney'] == 0:
                 balanceDict['RemainMoney'] = float(result['dnca_tot_amt'])
-                
+
 
 
             return balanceDict
 
-        else:
-            print("Error Code : " + str(res.status_code) + " | " + res.text)
-            return res.json()["msg_cd"]
-        
+        # 위 for 루프 break 못한 경우 (모든 재시도 실패)
+        return None
+
 
 
 
@@ -675,7 +690,7 @@ def GetBalanceIRP():
 
     else:
         print("Error Code : " + str(res.status_code) + " | " + res.text)
-        return res.json()["msg_cd"]
+        return None
 
 
 
@@ -739,8 +754,10 @@ def GetMyStockList():
 
         # 호출
         res = requests.get(URL, headers=headers, params=params)
-        
-        if res.headers['tr_cont'] == "M" or res.headers['tr_cont'] == "F":
+
+        # 안전한 헤더 접근 (에러 응답 시 tr_cont 헤더 누락 가능)
+        tr_cont_hdr = res.headers.get('tr_cont', '')
+        if tr_cont_hdr == "M" or tr_cont_hdr == "F":
             tr_cont = "N"
         else:
             tr_cont = ""
@@ -807,13 +824,23 @@ def GetMyStockList():
             print("Error Code : " + str(res.status_code) + " | " + res.text)
             #return res.json()["msg_cd"]
 
-            if res.json()["msg_cd"] == "EGW00123":
+            try:
+                msg_cd = res.json().get("msg_cd", "")
+            except Exception:
+                msg_cd = ""
+
+            # EGW00201 = 초당 거래건수 초과 → 1초 대기 후 재시도
+            if msg_cd == "EGW00201":
+                print("[GetMyStockList] Rate limit (EGW00201). Retry after 1s...")
+                time.sleep(1.0)
+
+            if msg_cd == "EGW00123":
                 DataLoad = False
 
             count += 1
             if count > 10:
                 DataLoad = False
-    
+
     return StockList
 
 

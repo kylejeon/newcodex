@@ -249,7 +249,24 @@ def main():
         return
 
     Balance = KisKR.GetBalance()
+    if Balance is None or not isinstance(Balance, dict):
+        msg = "GetBalance 실패 (KIS API 에러). 봇 안전 종료."
+        print(msg)
+        try:
+            telegram_alert.SendMessage(msg)
+        except Exception:
+            pass
+        return
+
     MyStockList = KisKR.GetMyStockList()
+    if not isinstance(MyStockList, list):
+        msg = "GetMyStockList 실패 (KIS API 에러). 봇 안전 종료."
+        print(msg)
+        try:
+            telegram_alert.SendMessage(msg)
+        except Exception:
+            pass
+        return
 
     pprint.pprint(Balance)
     pprint.pprint(MyStockList)
@@ -394,6 +411,8 @@ def main():
             data['Status'] = "SELL_DONE_CHECK"
             today_sell_code.append(stock_code)
             sold_today_set.add(stock_code)
+            # Capital lock fix: KOSPI 매도 후 cost basis 를 remain 에 회수 (백테스트와 동기)
+            remain_invest_money += hold['amt'] * hold['avg']
             try:
                 KIS_KR_StopTrader.CancelOrderByTicker(stock_code, "StopBuy", with_limit_orders=False)
             except Exception:
@@ -424,7 +443,10 @@ def main():
             telegram_alert.SendMessage(msg)
 
     # buy pass
-    invest_cnt = sum(1 for code in InvestStockList if get_holding_info(MyStockList, code)['amt'] > 0)
+    # Capital lock fix: 오늘 매도된 종목은 invest_cnt 에서 제외 (first/second signal sizing 정상화)
+    invest_cnt = sum(1 for code in InvestStockList
+                     if get_holding_info(MyStockList, code)['amt'] > 0
+                     and code not in today_sell_code)
 
     for stock_code in all_stocks.index:
         if invest_cnt >= 2:
