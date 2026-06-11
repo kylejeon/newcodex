@@ -41,7 +41,10 @@ def cache_one(stock_code: str) -> bool:
             return False
         path = CACHE_DIR / f'KR_{stock_code}.csv'
         df.to_csv(path)
-        print(f"  ✓ {stock_code}: {len(df):4d} rows  last={df.index[-1].date()}  → {path.name}")
+        # index 가 Timestamp 또는 str 둘 다 안전 처리
+        last_idx = df.index[-1]
+        last_date_str = last_idx.date().isoformat() if hasattr(last_idx, 'date') else str(last_idx)[:10]
+        print(f"  ✓ {stock_code}: {len(df):4d} rows  last={last_date_str}  → {path.name}")
         return True
     except Exception as e:
         print(f"  ! {stock_code}: error {e}")
