@@ -17,6 +17,7 @@ import os
 import pprint
 import time
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,60 @@ import telegram_alert
 
 
 Common.SetChangeMode("REAL")
+
+
+# === Trade decision snapshot (2026-06-11) ============================
+# 봇이 매매 결정한 시점의 input 데이터를 JSON 으로 저장 → 사후 백테 재현 가능.
+SNAPSHOT_DIR = Path(__file__).resolve().parent / 'logs' / 'snapshots'
+_SNAPSHOT_COLS = (
+    'open', 'high', 'low', 'close',
+    'prevOpen', 'prevHigh', 'prevLow', 'prevClose',
+    'prevHigh2', 'prevLow2', 'prevClose2',
+    'ma3_before', 'ma6_before', 'ma10_before', 'ma19_before',
+    'ma20_before', 'ma60_before', 'ma120_before', 'ma60_before2',
+    'prevRSI', 'prevRSI2', 'Disparity11', 'Disparity20',
+    'prevVolume', 'prevVolume2', 'prevVolume3',
+    'Average_Momentum', 'Average_Momentum3', 'prevChangeMa',
+    'prev_obv', 'prev_obv_ma', 'prev_obv_ma2',
+    'high_7_max', 'low_7_min',
+)
+
+
+def _save_decision_snapshot(stock_code, date, action, row, extra=None):
+    """봇 매매 결정 시점의 input 데이터 + 컨텍스트를 JSON 저장.
+
+    실패해도 봇 본 흐름은 영향 없음 (예외 흡수)."""
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        snap = {
+            'date': str(date)[:10],
+            'stock_code': stock_code,
+            'action': action,
+            'decision_time': datetime.now().isoformat(timespec='seconds'),
+        }
+        for col in _SNAPSHOT_COLS:
+            try:
+                val = row[col].values[0]
+                if pd.notna(val):
+                    snap[col] = float(val)
+            except (KeyError, IndexError):
+                pass
+        if extra:
+            for k, v in extra.items():
+                if v is None:
+                    continue
+                if isinstance(v, (np.floating, np.integer)):
+                    snap[k] = float(v)
+                else:
+                    snap[k] = v
+        date_str = str(date)[:10].replace('-', '')
+        path = SNAPSHOT_DIR / f'{date_str}_{stock_code}_{action}.json'
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(snap, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        # snapshot 실패가 매매 흐름을 막지 않도록
+        print(f"[snapshot] {stock_code} {action} save failed: {e}")
+# ====================================================================
 
 InvestStockList = ["122630", "252670", "233740", "251340"]
 InvestRate = 0.95  # KIS API의 실제 주문가능금액 기준으로 자동 조정 (StopTrader_System 의 adjustAmt=True 보호)
@@ -379,6 +434,13 @@ def main():
 
             stop_price = max(cut_price, hard_stop_price)
             if stop_price > 0:
+                _save_decision_snapshot(stock_code, date, 'CUT_STOP_REG', row, extra={
+                    'cut_rate': cut_rate, 'cut_price': float(cut_price),
+                    'hard_stop_price': float(hard_stop_price),
+                    'stop_price': float(stop_price),
+                    'hold_avg': float(hold.get('avg', 0)),
+                    'hold_amt': int(hold.get('amt', 0)),
+                })
                 try:
                     KIS_KR_StopTrader.MakeStopLoss(stock_code, stop_price, Exclusive=True)
                     msg = data['StockName'] + " 일봉형 손절 주문 등록 완료. 기준가: " + str(round(stop_price, 2))
@@ -407,6 +469,10 @@ def main():
                 is_sell_go = True
 
         if is_sell_go:
+            _save_decision_snapshot(stock_code, date, 'KOSPI_SELL', row, extra={
+                'hold_avg': float(hold.get('avg', 0)),
+                'hold_amt': int(hold.get('amt', 0)),
+            })
             pprint.pprint(KisKR.MakeSellMarketOrder(stock_code, hold['amt']))
             data['Status'] = "SELL_DONE_CHECK"
             today_sell_code.append(stock_code)
@@ -429,6 +495,15 @@ def main():
                 is_high_vol = prev_range_ratio >= HARD_STOP_VOL_TH
                 hard_stop_pct = HARD_STOP_122630_PCT_TIGHT if (weak_trend and is_high_vol) else HARD_STOP_122630_PCT_BASE
                 hard_stop_price = hold['avg'] * (1.0 - hard_stop_pct)
+                _save_decision_snapshot(stock_code, date, 'HARD_STOP_REG', row, extra={
+                    'prev_range_ratio': float(prev_range_ratio),
+                    'weak_trend': bool(weak_trend),
+                    'is_high_vol': bool(is_high_vol),
+                    'hard_stop_pct': float(hard_stop_pct),
+                    'hard_stop_price': float(hard_stop_price),
+                    'hold_avg': float(hold.get('avg', 0)),
+                    'hold_amt': int(hold.get('amt', 0)),
+                })
                 try:
                     KIS_KR_StopTrader.MakeStopLoss(stock_code, hard_stop_price, Exclusive=True)
                     msg = data['StockName'] + " 일봉형 하드스탑 등록 완료. 기준가: " + str(round(hard_stop_price, 2))
@@ -485,6 +560,13 @@ def main():
                 while buy_amt > 0 and remain_invest_money < (buy_amt * buy_price * 1.0015):
                     buy_amt -= 1
                 if buy_amt > 0:
+                    _save_decision_snapshot(stock_code, date, 'KOSPI_BUY', row, extra={
+                        'invest_go_money': float(invest_go_money),
+                        'buy_price': float(buy_price),
+                        'buy_amt': int(buy_amt),
+                        'total_exposure': float(total_exposure),
+                        'remain_invest_money': float(remain_invest_money),
+                    })
                     order_data = KisKR.MakeBuyMarketOrder(stock_code, buy_amt, True)
                     pprint.pprint(order_data)
                     if is_order_accepted(order_data):
@@ -555,6 +637,19 @@ def main():
                 while buy_amt > 0 and remain_invest_money < (buy_amt * target_price * 1.0015):
                     buy_amt -= 1
                 if buy_amt > 0:
+                    _save_decision_snapshot(stock_code, date, 'DOLPA_BUY_REG', row, extra={
+                        'dolpa_rate': float(dolpa_rate),
+                        'gap': float(gap),
+                        'gap_st': float(gap_st),
+                        'target_price': float(target_price),
+                        'rate': float(rate),
+                        'adjust_rate': float(adjust_rate),
+                        'invest_go_money': float(invest_go_money),
+                        'buy_amt': int(buy_amt),
+                        'is_jung': bool(is_jung),
+                        'is_no_way': bool(is_no_way),
+                        'total_exposure': float(total_exposure),
+                    })
                     KIS_KR_StopTrader.MakeStopBuyOrder(stock_code, buy_amt, target_price, Exclusive=True)
                     data['Status'] = "READY"
                     data['DayStatus'] = "BUY_DAY"

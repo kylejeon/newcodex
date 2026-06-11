@@ -1100,3 +1100,50 @@ if max_gain >= 20 and yc < entry_px:
 2. 미니PC pull
 3. 내일 (6/5) 09:01 자동 실행 확인 — daily bot 정상 가동 + 9:06 StopTrader 정상 가동
 4. 향후 다른 GetBalance 호출자 (Kosdaqpi_Dashboard.py 등) 점진적 None 체크 추가 필요
+
+---
+
+# 2026-06-11 trade snapshot 저장 + OHLC cache 인프라
+
+## 배경
+6/10 251340 BUY 가 백테에 없는 trade. 조사 결과:
+- 봇 룰 = 백테 룰 동일 (코드 검증)
+- 봇과 백테가 본 OHLC 가 미세하게 다름 (KIS vs FDR source 차이)
+  예: 5/29 open Mac 2120 vs 미니PC 2020 (-100원)
+  예: 6/4 high  Mac 2225 vs 미니PC 2165 (-60원)
+- 봇 자체 데이터 이상 감지 + 재fetch 메커니즘 작동 (스크린샷 확인)
+- 결국 trade 분기는 데이터 시점/source 차이가 만든 비결정성
+
+## A 작업: trade 결정 시점 스냅샷 저장
+- Kosdaqpi_Bot_TR_daily.py 에 _save_decision_snapshot 헬퍼 추가
+- 5곳 결정 시점에서 input 데이터 (OHLC, MA, RSI 등) + 컨텍스트 (target, cut_price) JSON 저장
+  1. CUT_STOP_REG: 251340/233740 cut stop loss 등록
+  2. KOSPI_SELL: 122630/252670 시가 매도
+  3. HARD_STOP_REG: 122630 하드스탑 등록
+  4. KOSPI_BUY: 122630/252670 시가 매수
+  5. DOLPA_BUY_REG: 251340/233740 dolpa stop buy 등록
+- 저장 경로: logs/snapshots/YYYYMMDD_TICKER_ACTION.json
+- 실패 시 봇 흐름 영향 없음 (예외 흡수)
+- 향후 같은 trade 분기 발생 시 정확한 input 재현 가능
+
+## B-1 작업: OHLC cache 인프라
+- cache_ohlc.py: 매일 18:00 cron 으로 KR 4종목 OHLC 캐시 저장 (2200일)
+  → 봇/백테가 같은 데이터 source 사용 가능
+- ohlc_cache_loader.py: load_cached_ohlc() — 캐시 우선 + 폴백
+- Phase 1 (오늘): 캐시만 쌓음. 봇/백테 코드 안 건드림.
+- Phase 2 (다음): 1주일 캐시 쌓이고 검증 후 봇/백테가 캐시 사용하도록 마이그레이션.
+
+## 미니PC 등록
+crontab 추가:
+0 18 * * 1-5 /usr/bin/flock -n /tmp/ohlc_cache.lock /bin/bash -lc 'cd /home/kylejeon/codex && /home/kylejeon/codex/codex/bin/python /home/kylejeon/codex/cache_ohlc.py >> /home/kylejeon/codex/logs/cache_$(date +\%Y\%m\%d).log 2>&1'
+
+## 5~6월 누적 trade 비교 (참고)
+- 실거래가 백테보다 +24pp 우위 (mega-rocket 시기 잘 탔음)
+- 다만 6/4 EGW00201 사고 (-3.44pp) + 6/10~11 백테 없는 trade (-4.2%) = 데이터 source 차이 누적
+- 봇 자체 룰은 정상 동작 인정. 데이터 통일이 핵심 과제.
+
+## 다음
+1. 미니PC pull (Kosdaqpi_Bot_TR_daily.py 수정 + cache_ohlc.py + loader)
+2. crontab 추가 (18:00 cache)
+3. 6/12 (금) 18:00 첫 캐시 실행 확인
+4. 1주일 후 (6/19) 캐시 데이터 검증 → Phase 2 (봇/백테 캐시 사용 마이그레이션) 진행 여부 결정
