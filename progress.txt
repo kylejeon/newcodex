@@ -1147,3 +1147,95 @@ crontab 추가:
 2. crontab 추가 (18:00 cache)
 3. 6/12 (금) 18:00 첫 캐시 실행 확인
 4. 1주일 후 (6/19) 캐시 데이터 검증 → Phase 2 (봇/백테 캐시 사용 마이그레이션) 진행 여부 결정
+
+---
+
+# 2026-06-26 v7_best BE_STOP (Break-Even Stop) 적용 — Phase A + Phase B
+
+## 배경
+6/24 122630 max_gain +10% → -6.57% 손실 사례 발생.
+"흑자 → 적자" 전환을 차단할 stop 규칙 필요.
+
+## Phase A (사후 시뮬, cascading 미반영) — 완료
+- v7_best_BESTOP_phaseA.py: trades_cache 의 모든 trade 에 BE_STOP threshold 적용 시뮬
+- 결과 (520 trades, 2017~2026):
+  - baseline: +923.67% / Win 56.7%
+  - 5% BE_STOP: +956.34% (+32.67pp) / Win 56.7% / 7 trigger
+  - 7%: +30.22pp / 6 trigger
+  - 10%/15%/20%: +10.43pp / 1 trigger
+- 한계: cascading effect 무시 → 보수적 추정
+
+## Phase B (정식 백테 fork + cascading 자연 발생) — 완료
+- v7_best_BESTOP_run.py: BE_STOP 코드가 통합된 v7_best 백테 사본 (BE_STOP_PCT 환경변수)
+- v7_best_BESTOP_phaseB.py: subprocess 로 0/5/7/10% 4번 호출 + 결과 비교
+- 결과 (522 trades, 2018-01~2026-06):
+  - baseline: +7868% / Win 56.3% / MDD -32.71% / 0 trigger
+  - 5% BE_STOP: +9298% (+1429.93pp!!) / Win 55.0% / MDD -32.71% / 16 trigger ★★★
+  - 7%: +8954% (+1085pp) / Win 55.3% / 12 trigger
+  - 10%: +8890% (+1021pp) / Win 55.6% / 5 trigger
+- Walk-forward fold (BE_STOP 5%) 트리거 분포:
+  - Fold1 (2023~2024/6): 3 trigger
+  - Fold2 (2024/7~2025/6): 4 trigger
+  - Fold3 (2025/7~ ): 4 trigger → 시기 편향 없음, robust
+- 6/23 122630 +13.76% trigger ← 사용자가 본 6/24 케이스 정확히 일치 (BE_STOP 적용 시 손실 회피)
+- 결과 파일: mnq_backtest_output/v7_best_BESTOP_phaseB_result.txt
+
+## 봇 적용 (Phase 1: 즉시 적용)
+- Kosdaqpi_Bot_TR_daily.py 수정:
+  - ENABLE_BE_STOP=True, BE_STOP_THRESHOLD_PCT=5.0 추가
+  - calc_be_stop_price() 헬퍼 (BUY 이후 종가 max → max_gain ≥ 5% 시 entry break stop)
+  - CUT_STOP_REG (233740/251340) 분기: stop_price = max(cut_price, hard_stop_price, be_stop_price)
+  - HARD_STOP_REG (122630) 분기: final_stop_price = max(hard_stop_price, be_stop_price)
+  - snapshot extra 에 be_stop_price/be_max_gain_pct/be_triggered 추가
+  - 텔레그램 메시지에 BE_STOP 트리거 시 별도 표시
+
+## 결론
+**BE_STOP 5% 적용 강력 권장** (cascading 포함 +1430pp 개선, MDD 변화 없음, 시기 편향 없음).
+
+## 다음
+1. 미니PC pull (Kosdaqpi_Bot_TR_daily.py 의 BE_STOP 코드 + v7_best_BESTOP_* 백테 파일)
+2. 6/27 (월) 09:00 daily bot 실제 BE_STOP 동작 확인 (텔레그램 메시지)
+3. 1주일 후 (~7/3) BE_STOP 실거래 vs 백테 비교
+4. 252670 의 KOSPI_SELL 경로에는 BE_STOP 없음 (KOSDAQ/HARD_STOP 만 적용). Phase B 시 252670 BE_STOP trigger 다수 (8건). 추후 252670 BE_STOP 추가 검토 필요.
+
+---
+
+# 2026-06-26 (이어서) — 252670 BE_STOP 봇 추가 + Stepped 모드 비교
+
+## 252670 BE_STOP 봇 적용 (Phase 1 보강)
+- 백테 (Phase B) 에서는 이미 252670 BE_STOP 트리거 8건 (전체 16건의 50%)
+- 봇에는 122630 HARD_STOP_REG 경로만 BE_STOP 적용 → 252670 누락
+- Kosdaqpi_Bot_TR_daily.py 의 KOSPI hold (is_sell_go=False) 분기에 252670 BE_STOP 등록 추가
+- 새 action: BE_STOP_REG (스냅샷 저장됨)
+
+## Stepped (가변 BE_STOP) 시뮬레이션 결과
+사용자 제안: max_gain 5/10/15% 초과 시 단계별 stop 가변 적용
+구현:
+- max_gain >= 15% → stop @ entry × 1.10 (10% 수익 lock)
+- max_gain >= 10% → stop @ entry × 1.05 (5% 수익 lock)
+- max_gain >=  5% → stop @ entry × 1.00 (entry break, simple_5 와 동일)
+
+## Phase B 5 모드 비교 (522~536 trades, 2018~2026)
+
+| Mode      | Revenue | Win   | MDD     | Trades | BE_trig | vs base   |
+|-----------|---------|-------|---------|--------|---------|-----------|
+| baseline  | +7868%  | 56.3% | -32.71% | 522    | 0       | -         |
+| simple_5  | +9298%  | 55.0% | -32.71% | 527    | 16      | +1429.93pp ★ |
+| simple_7  | +8954%  | 55.3% | -32.71% | 526    | 12      | +1085.19pp |
+| simple_10 | +8890%  | 55.6% | -32.71% | 523    | 5       | +1021.41pp |
+| stepped   | +8574%  | 55.6% | -32.71% | 536    | 24      |  +705.55pp |
+
+## 결론
+- **simple_5 (현재 봇 적용 모드) 가 가장 강력** (+1430pp)
+- Stepped 는 trigger 가 24건으로 가장 많지만 효과는 simple_5 의 절반
+- 이유: stepped 가 max_gain ≥ 10/15% 도달 시 더 일찍 청산 → upside 손실
+- 결국 "entry break" 만으로 충분, 추가 lock-in 은 winners 의 추가 상승을 깎음
+- **봇은 simple_5% 그대로 유지** 권장
+
+## 6/24 122630 케이스 검증
+Phase B 트리거 목록에 2026-06-23 122630 max_gain +13.76% 발견 → 6/24 -6.57% 손실 시뮬 케이스에 정확히 일치. simple_5 적용 시 entry break sell 로 손실 회피.
+
+## 다음
+1. 미니PC pull
+2. 6/27 (월) 09:00 daily bot 실제 BE_STOP 등록 확인 (텔레그램 메시지)
+3. 1주일 후 (~7/3) BE_STOP 실거래 vs 백테 결과 비교

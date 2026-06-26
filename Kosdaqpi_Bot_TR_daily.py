@@ -97,6 +97,13 @@ HARD_STOP_VOL_TH = 0.045
 ENABLE_122630_HARD_STOP = True
 HARD_STOP_122630_PCT_TIGHT = 0.09
 HARD_STOP_122630_PCT_BASE = 0.12
+# === BE_STOP (Break-Even Stop) — 2026-06-26 ===
+# 보유 중 종가 max_gain >= BE_STOP_THRESHOLD_PCT 도달 후 가격이 진입가 아래로 떨어지면
+# 진입가에서 자동 청산. 흑자→적자 전환을 차단하는 안전망.
+# Phase A 백테 결과(2017~2026, 520 trades): 5% 임계가 7 trade trigger,
+# 모두 손실 trade 보호 → cum_PnL +32.67pp 향상 (Win% 영향 없음).
+ENABLE_BE_STOP = True
+BE_STOP_THRESHOLD_PCT = 5.0
 CLOSE_BASED_CUT_CODES = {"233740", "251340"}
 KOSPI_252670_DISPARITY11_TH = 106
 KOSPI_122630_DISPARITY_LOW = 98
@@ -145,6 +152,43 @@ def calc_hold_days(curr_date, buy_date_str):
         return max(0, (cur_dt.normalize() - buy_dt.normalize()).days)
     except Exception:
         return 0
+
+
+def get_stock_df(stock_code, stock_df_list):
+    for entry in stock_df_list:
+        if stock_code in entry:
+            return entry[stock_code]
+    return None
+
+
+def calc_max_close_since_buy(stock_df, buy_date_str, current_date):
+    """BUY 이후 종가 max (오늘 제외). BE_STOP 트리거 판정용."""
+    if stock_df is None or not buy_date_str:
+        return 0.0
+    try:
+        buy_dt = pd.to_datetime(buy_date_str)
+        cur_dt = current_date if isinstance(current_date, pd.Timestamp) else pd.to_datetime(current_date)
+        slice_df = stock_df[(stock_df.index >= buy_dt) & (stock_df.index < cur_dt)]
+        if len(slice_df) == 0:
+            return 0.0
+        max_close = slice_df['close'].max()
+        return float(max_close) if pd.notna(max_close) else 0.0
+    except Exception:
+        return 0.0
+
+
+def calc_be_stop_price(stock_code, hold_avg, buy_date_str, current_date, stock_df_list):
+    """BE_STOP 트리거 시 stop_price 반환. 미트리거 시 0.0."""
+    if not ENABLE_BE_STOP or hold_avg <= 0:
+        return 0.0, 0.0, False
+    stock_df = get_stock_df(stock_code, stock_df_list)
+    max_close = calc_max_close_since_buy(stock_df, buy_date_str, current_date)
+    if max_close <= 0:
+        return 0.0, 0.0, False
+    max_gain_pct = (max_close - hold_avg) / hold_avg * 100.0
+    if max_gain_pct >= BE_STOP_THRESHOLD_PCT:
+        return float(hold_avg), float(max_gain_pct), True
+    return 0.0, float(max_gain_pct), False
 
 
 def is_order_accepted(order_data):
@@ -432,18 +476,28 @@ def main():
                 hard_stop_pct = HARD_STOP_233740_PCT_TIGHT if (weak_trend and is_high_vol) else HARD_STOP_233740_PCT_BASE
                 hard_stop_price = hold['avg'] * (1.0 - hard_stop_pct)
 
-            stop_price = max(cut_price, hard_stop_price)
+            be_stop_price, be_max_gain_pct, be_triggered = calc_be_stop_price(
+                stock_code, hold.get('avg', 0), data.get('BuyDate', ''), date, stock_df_list
+            )
+
+            stop_price = max(cut_price, hard_stop_price, be_stop_price)
             if stop_price > 0:
                 _save_decision_snapshot(stock_code, date, 'CUT_STOP_REG', row, extra={
                     'cut_rate': cut_rate, 'cut_price': float(cut_price),
                     'hard_stop_price': float(hard_stop_price),
+                    'be_stop_price': float(be_stop_price),
+                    'be_max_gain_pct': float(be_max_gain_pct),
+                    'be_triggered': bool(be_triggered),
                     'stop_price': float(stop_price),
                     'hold_avg': float(hold.get('avg', 0)),
                     'hold_amt': int(hold.get('amt', 0)),
                 })
                 try:
                     KIS_KR_StopTrader.MakeStopLoss(stock_code, stop_price, Exclusive=True)
-                    msg = data['StockName'] + " 일봉형 손절 주문 등록 완료. 기준가: " + str(round(stop_price, 2))
+                    label = " 일봉형 손절+BE_STOP 등록 완료" if be_triggered else " 일봉형 손절 주문 등록 완료"
+                    msg = data['StockName'] + label + ". 기준가: " + str(round(stop_price, 2))
+                    if be_triggered:
+                        msg += f" (BE_STOP @ entry {hold['avg']:.0f}, max_gain {be_max_gain_pct:+.2f}%)"
                     print(msg)
                     telegram_alert.SendMessage(msg)
                 except Exception as e:
@@ -488,6 +542,32 @@ def main():
             telegram_alert.SendMessage(msg)
             kosdaq_sell_cnt += 1
         else:
+            # === 252670 BE_STOP (2026-06-26 추가) — 하드스탑 없으므로 BE_STOP 만 ===
+            # Phase B 백테 결과: 252670 trigger 8건 (전체 16건 중 50%), 5y +1430pp 효과의 핵심
+            if stock_code == "252670" and hold['avg'] > 0:
+                be_stop_price, be_max_gain_pct, be_triggered = calc_be_stop_price(
+                    stock_code, hold.get('avg', 0), data.get('BuyDate', ''), date, stock_df_list
+                )
+                if be_triggered and be_stop_price > 0:
+                    _save_decision_snapshot(stock_code, date, 'BE_STOP_REG', row, extra={
+                        'be_stop_price': float(be_stop_price),
+                        'be_max_gain_pct': float(be_max_gain_pct),
+                        'be_triggered': True,
+                        'hold_avg': float(hold.get('avg', 0)),
+                        'hold_amt': int(hold.get('amt', 0)),
+                    })
+                    try:
+                        KIS_KR_StopTrader.MakeStopLoss(stock_code, be_stop_price, Exclusive=True)
+                        msg = (data['StockName'] + " 일봉형 BE_STOP 등록 완료. 기준가: "
+                               + str(round(be_stop_price, 2))
+                               + f" (max_gain {be_max_gain_pct:+.2f}%)")
+                        print(msg)
+                        telegram_alert.SendMessage(msg)
+                    except Exception as e:
+                        msg = data['StockName'] + " 일봉형 BE_STOP 등록 실패: " + str(e)
+                        print(msg)
+                        telegram_alert.SendMessage(msg)
+
             # 122630 하드스탑: 보류 시 장중 하드스탑을 StopTrader 에 등록
             if ENABLE_122630_HARD_STOP and stock_code == "122630" and hold['avg'] > 0:
                 prev_range_ratio = (row['prevHigh'].values[0] - row['prevLow'].values[0]) / row['prevClose'].values[0]
@@ -495,18 +575,31 @@ def main():
                 is_high_vol = prev_range_ratio >= HARD_STOP_VOL_TH
                 hard_stop_pct = HARD_STOP_122630_PCT_TIGHT if (weak_trend and is_high_vol) else HARD_STOP_122630_PCT_BASE
                 hard_stop_price = hold['avg'] * (1.0 - hard_stop_pct)
+
+                be_stop_price, be_max_gain_pct, be_triggered = calc_be_stop_price(
+                    stock_code, hold.get('avg', 0), data.get('BuyDate', ''), date, stock_df_list
+                )
+                final_stop_price = max(hard_stop_price, be_stop_price)
+
                 _save_decision_snapshot(stock_code, date, 'HARD_STOP_REG', row, extra={
                     'prev_range_ratio': float(prev_range_ratio),
                     'weak_trend': bool(weak_trend),
                     'is_high_vol': bool(is_high_vol),
                     'hard_stop_pct': float(hard_stop_pct),
                     'hard_stop_price': float(hard_stop_price),
+                    'be_stop_price': float(be_stop_price),
+                    'be_max_gain_pct': float(be_max_gain_pct),
+                    'be_triggered': bool(be_triggered),
+                    'final_stop_price': float(final_stop_price),
                     'hold_avg': float(hold.get('avg', 0)),
                     'hold_amt': int(hold.get('amt', 0)),
                 })
                 try:
-                    KIS_KR_StopTrader.MakeStopLoss(stock_code, hard_stop_price, Exclusive=True)
-                    msg = data['StockName'] + " 일봉형 하드스탑 등록 완료. 기준가: " + str(round(hard_stop_price, 2))
+                    KIS_KR_StopTrader.MakeStopLoss(stock_code, final_stop_price, Exclusive=True)
+                    label = " 일봉형 하드스탑+BE_STOP 등록 완료" if be_triggered else " 일봉형 하드스탑 등록 완료"
+                    msg = data['StockName'] + label + ". 기준가: " + str(round(final_stop_price, 2))
+                    if be_triggered:
+                        msg += f" (BE_STOP @ entry {hold['avg']:.0f}, max_gain {be_max_gain_pct:+.2f}%)"
                     print(msg)
                     telegram_alert.SendMessage(msg)
                 except Exception as e:
