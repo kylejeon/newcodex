@@ -243,3 +243,4 @@ real_token.json
 # 대용량 백테스트 결과
 mnq_backtest_output/
 autobot_data/
+codex/
