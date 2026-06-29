@@ -244,3 +244,9 @@ real_token.json
 mnq_backtest_output/
 autobot_data/
 codex/
+
+# Bot runtime state (added 2026-06-29)
+KR_Market_OpenCheck.json
+real_token.json
+kosdaq_index_cache.csv
+logs/
